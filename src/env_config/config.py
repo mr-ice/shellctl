@@ -98,19 +98,25 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = {
         default=None,
         description="Local path to clone repo into",
     ),
-    "curated.paths": ConfigKey(
-        key="curated.paths",
+    "compose.paths": ConfigKey(
+        key="compose.paths",
         value_type="list_of_strings",
         default=[],
-        description="Directories containing curated shell init files",
+        description="Directories containing compose shell init files",
         merge_strategy="append",
     ),
-    "curated.shell_rc_files": ConfigKey(
-        key="curated.shell_rc_files",
+    "compose.shell_rc_files": ConfigKey(
+        key="compose.shell_rc_files",
         value_type="list_of_strings",
         default=[],
         description="RC file variants (e.g. zshrc, zshenv, zprofile)",
         merge_strategy="append",
+    ),
+    "compose.allow_non_repo": ConfigKey(
+        key="compose.allow_non_repo",
+        value_type="string",
+        default="false",
+        description="Allow compose paths that are not git repos on main:HEAD",
     ),
 }
 

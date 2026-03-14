@@ -8,18 +8,21 @@ Notes
 -----
 - For `bash` we use `BASH_XTRACEFD` to redirect xtrace to a file and set
   `PS4` to include timestamps and source file info.
-- For `zsh` and `tcsh` we run with `-x` and capture stderr; parsing is
-  best-effort because these shells don't provide an exact equivalent to
-  `BASH_SOURCE` in all versions.
+- For `tcsh` we use a patched tcsh with `TCSH_XTRACEFD` (see patches/README.md);
+  when available, xtrace is redirected to a fd with timestamped lines.
+- For `zsh` we run with `-x` and capture stderr; parsing is best-effort.
 """
 from __future__ import annotations
 
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import tempfile
 import time
+from pathlib import Path
+
 from dataclasses import dataclass
 
 
@@ -43,6 +46,30 @@ def _timestamp_now() -> float:
     return time.time()
 
 
+def get_tcsh_for_tracing(shell_path: str | None = None) -> str | None:
+    """Resolve tcsh path for tracing. Prefer patched tcsh with TCSH_XTRACEFD support.
+
+    Checks (in order):
+    1. shell_path if provided and executable
+    2. ENVCONFIG_TCSH_PATH (patched tcsh built from patches/README.md)
+    3. tcsh-src/tcsh if present (local build from project root)
+    4. shutil.which("tcsh") as fallback (may not support TCSH_XTRACEFD)
+    """
+    import shutil
+
+    if shell_path and os.path.isfile(shell_path) and os.access(shell_path, os.X_OK):
+        return shell_path
+    env_path = os.environ.get("ENVCONFIG_TCSH_PATH")
+    if env_path and os.path.isfile(env_path) and os.access(env_path, os.X_OK):
+        return env_path
+    # tcsh-src/tcsh relative to project (env-config root or cwd)
+    for base in (Path(__file__).resolve().parents[2], Path.cwd()):
+        candidate = base / "tcsh-src" / "tcsh"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return shutil.which("tcsh")
+
+
 def run_shell_trace(
     family: str,
     shell_path: str | None = None,
@@ -58,7 +85,12 @@ def run_shell_trace(
     command that immediately exits after startup.
     """
     family = family.lower()
-    shell = shell_path or ("bash" if family == "bash" else ("zsh" if family == "zsh" else "tcsh"))
+    if family == "bash":
+        shell = shell_path or "bash"
+    elif family == "zsh":
+        shell = shell_path or "zsh"
+    else:
+        shell = shell_path or get_tcsh_for_tracing(shell_path) or "tcsh"
 
     # Build basic invocation flags: prefer login noninteractive by default
     if args is None:
@@ -146,19 +178,56 @@ def run_shell_trace(
                 ofh.write(txt)
         return txt
 
-    # tcsh: use -x to echo commands to stderr; no PS4 available.
+    # tcsh: use TCSH_XTRACEFD when we have patched tcsh (same approach as bash).
+    # Patched tcsh writes timestamped lines to the fd; unpatched tcsh ignores it.
     if family in ("tcsh", "csh"):
+        tf = tempfile.NamedTemporaryFile(delete=False)
+        tf.close()
+        fd = os.open(tf.name, os.O_WRONLY | os.O_APPEND)
+        env = os.environ.copy()
+        env["TCSH_XTRACEFD"] = str(fd)
         cmd = [shell, "-x"] + args
-        if dry_run:
-            return "DRYRUN: " + " ".join(shlex.quote(c) for c in cmd)
-        proc = subprocess.run(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=timeout
-        )
-        txt = proc.stderr or ""
+        try:
+            if dry_run:
+                os.close(fd)
+                return "DRYRUN: " + " ".join(shlex.quote(c) for c in cmd)
+            subprocess.run(
+                cmd,
+                env=env,
+                pass_fds=(fd,),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout,
+            )
+        finally:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        with open(tf.name, encoding="utf8", errors="ignore") as fh:
+            txt = fh.read()
         if output_file and txt:
             with open(output_file, "w", encoding="utf8") as ofh:
                 ofh.write(txt)
-        return txt
+        try:
+            os.unlink(tf.name)
+        except Exception:
+            pass
+        # If trace is empty (unpatched tcsh ignores TCSH_XTRACEFD), fall back to stderr
+        if not txt.strip():
+            proc = subprocess.run(
+                cmd[:1] + ["-x"] + cmd[2:],
+                env={k: v for k, v in os.environ.items() if k != "TCSH_XTRACEFD"},
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+            )
+            txt = proc.stderr or ""
+            if output_file and txt:
+                with open(output_file, "w", encoding="utf8") as ofh:
+                    ofh.write(txt)
+        return txt or ""
 
     # fallback: run shell and capture stderr
     cmd = [shell] + args
@@ -227,11 +296,21 @@ def parse_bash_trace(trace_text: str) -> dict[str, FileTrace]:
     return files
 
 
+def _expand_trace_path(path: str) -> str:
+    """Expand ~ and $HOME in a path from trace output."""
+    path = path.strip().strip("'\"")
+    path = os.path.expanduser(path)
+    # expand $HOME / ${HOME} when expanduser didn't handle it
+    home = os.path.expanduser("~")
+    path = path.replace("$HOME", home).replace("${HOME}", home)
+    return path
+
+
 def parse_zsh_trace(trace_text: str) -> dict[str, FileTrace]:
     """Parse zsh trace output with best-effort handling of `source` and PS4 timestamps."""
     files: dict[str, FileTrace] = {}
     ts_pat = re.compile(r"^\+([0-9]+\.[0-9]+)\s+(.*)$")
-    source_pat = re.compile(r"(?:^|\s)(?:source|\.)\s+([^\s]+)")
+    source_pat = re.compile(r"(?:^|\s)(?:source|\.)\s+([^\s\"']+|\"[^\"]*\"|'[^']*')")
     lines = trace_text.splitlines()
     synthetic_start = time.time()
     delta = 0.000001
@@ -248,14 +327,14 @@ def parse_zsh_trace(trace_text: str) -> dict[str, FileTrace]:
             next_ts += delta
             rest = line
 
-        # look for explicit path token
+        # look for explicit path token (absolute path)
         p = re.search(r"(/[^\s:]+)[:]?\d*", rest)
         if p:
-            src_path = os.path.expanduser(p.group(1))
+            src_path = _expand_trace_path(p.group(1))
         else:
             m2 = source_pat.search(rest)
             if m2:
-                src_path = os.path.expanduser(m2.group(1))
+                src_path = _expand_trace_path(m2.group(1))
             else:
                 # skip lines without clear source
                 continue
@@ -281,7 +360,7 @@ def parse_tcsh_trace(trace_text: str) -> dict[str, FileTrace]:
     """
     files: dict[str, FileTrace] = {}
     ts_pat = re.compile(r"^\+([0-9]+\.[0-9]+)\s+(.*)$")
-    source_pat = re.compile(r"(?:^|\s)(?:source|\.)\s+([^\s]+)")
+    source_pat = re.compile(r"(?:^|\s)(?:source|\.)\s+([^\s\"']+|\"[^\"]*\"|'[^']*')")
     lines = trace_text.splitlines()
     synthetic_start = time.time()
     delta = 0.000001
@@ -299,11 +378,11 @@ def parse_tcsh_trace(trace_text: str) -> dict[str, FileTrace]:
 
         m2 = source_pat.search(rest)
         if m2:
-            src_path = os.path.expanduser(m2.group(1))
+            src_path = _expand_trace_path(m2.group(1))
         else:
             p = re.search(r"(/[^\s:]+)[:]?\d*", rest)
             if p:
-                src_path = os.path.expanduser(p.group(1))
+                src_path = _expand_trace_path(p.group(1))
             else:
                 continue
 

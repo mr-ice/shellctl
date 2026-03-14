@@ -28,7 +28,18 @@ class TestConfigShow:
         assert "trace.threshold_secs" in out
         assert "tui.page_size" in out
         assert "repo.url" in out
-        assert "curated.paths" in out
+        assert "compose.paths" in out
+
+    def test_show_single_key(self, _isolate, capsys):
+        main(["config", "set", "compose.paths", "/a", "/b"])
+        rc = main(["config", "show", "compose.paths"])
+        assert rc == 0
+        assert capsys.readouterr().out.strip() == "['/a', '/b']"
+
+    def test_show_unknown_key(self, _isolate, capsys):
+        rc = main(["config", "show", "no.such.key"])
+        assert rc == 1
+        assert "unknown config key" in capsys.readouterr().err
 
 
 # -- config get -------------------------------------------------------------
@@ -97,21 +108,21 @@ class TestConfigSet:
         assert "threshold_secs" not in data.get("trace", {})
 
     def test_set_list(self, _isolate, capsys):
-        rc = main(["config", "set", "curated.paths", "/a", "/b"])
+        rc = main(["config", "set", "compose.paths", "/a", "/b"])
         assert rc == 0
         user_cfg, _ = _isolate
         with open(user_cfg, "rb") as f:
             data = tomllib.load(f)
-        assert data["curated"]["paths"] == ["/a", "/b"]
+        assert data["compose"]["paths"] == ["/a", "/b"]
 
     def test_set_list_append(self, _isolate, capsys):
-        main(["config", "set", "curated.paths", "/a"])
-        rc = main(["config", "set", "curated.paths", "/b", "/c", "--append"])
+        main(["config", "set", "compose.paths", "/a"])
+        rc = main(["config", "set", "compose.paths", "/b", "/c", "--append"])
         assert rc == 0
         user_cfg, _ = _isolate
         with open(user_cfg, "rb") as f:
             data = tomllib.load(f)
-        assert data["curated"]["paths"] == ["/a", "/b", "/c"]
+        assert data["compose"]["paths"] == ["/a", "/b", "/c"]
 
     def test_set_string_or_null(self, _isolate, capsys):
         rc = main(["config", "set", "repo.url", "https://example.com/repo.git"])

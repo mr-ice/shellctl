@@ -24,30 +24,6 @@ CACHE_DIR = Path(os.environ.get("ENVCONFIG_CACHE_DIR") or Path.home() / ".cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-DEFAULT_CANDIDATES = {
-    "bash": [
-        ".bash_profile",
-        ".bash_login",
-        ".profile",
-        ".bashrc",
-        ".bash_logout",
-    ],
-    "zsh": [
-        ".zprofile",
-        ".zshenv",
-        ".zprofile",
-        ".zshrc",
-        ".zlogin",
-        ".zlogout",
-    ],
-    "tcsh": [
-        ".cshrc",
-        ".login",
-        ".tcshrc",
-    ],
-}
-
-
 def _cache_path(family: str, mode: str | None = None) -> Path:
     suffix = f"_{mode}" if mode else ""
     return CACHE_DIR / f"discovered_{family}{suffix}.json"
@@ -143,42 +119,18 @@ def _run_tracer(family: str, shell_path: str, args: list[str]) -> set[str]:
         if not trace_txt:
             return set()
         ftraces = parse_trace(trace_txt, family=family)
+        home = str(Path.home())
         for ft in ftraces:
-            # normalize to basename for discovery
+            # Only include files under $HOME (user's startup files)
+            abs_path = os.path.normpath(os.path.abspath(os.path.expanduser(ft.path)))
+            if home and not abs_path.startswith(home):
+                continue
             name = os.path.basename(ft.path)
             if name:
                 files.add(name)
         return files
     except Exception:
         return set()
-
-
-def _mode_args_for_family(family: str, mode: str) -> list[str]:
-    """Return invocation args for a family given mode identifier.
-
-    mode is one of: 'login_interactive', 'login_noninteractive',
-    'nonlogin_interactive', 'nonlogin_noninteractive'.
-    """
-    args: list[str] = []
-    login, interactive = mode.split("_")
-    # common flags: -l for login, -i for interactive, -c to run simple command
-    if family in ("bash", "zsh", "tcsh"):
-        if login == "login":
-            args.append("-l")
-        if interactive == "interactive":
-            args.append("-i")
-        # non-interactive but with a command to avoid shell waiting
-        if interactive == "noninteractive":
-            args.extend(["-c", ":"])  # no-op
-    else:
-        # fallback general pattern
-        if login == "login":
-            args.append("-l")
-        if interactive == "interactive":
-            args.append("-i")
-        if interactive == "noninteractive":
-            args.extend(["-c", ":"])
-    return args
 
 
 def discover_startup_files_modes(
@@ -188,45 +140,57 @@ def discover_startup_files_modes(
     *,
     existing_only: bool = False,
     full_paths: bool = False,
+    modes: list[str] | None = None,
 ) -> dict:
     """Discover startup files for each invocation mode (login/interactive combos).
 
-    Returns a dict mapping mode -> list of file basenames.
+    Parameters
+    ----------
+    modes : list[str] or None
+        Modes to discover. If None, use all INVOCATION_MODES.
+
+    Returns
+    -------
+    dict
+        Mapping mode -> list of file basenames.
     """
+    from .modes import INVOCATION_MODES, mode_to_args
+
     family = family.lower()
-    modes = [
-        "login_interactive",
-        "login_noninteractive",
-        "nonlogin_interactive",
-        "nonlogin_noninteractive",
-    ]
+    mode_list = modes if modes is not None else list(INVOCATION_MODES)
     results: dict[str, list[str]] = {}
 
-    for mode in modes:
+    # Resolve shell path for tracing; required to actually trace sourced files.
+    # For tcsh, prefer patched tcsh with TCSH_XTRACEFD (see patches/README.md).
+    if family == "tcsh" or family == "csh":
+        from .trace import get_tcsh_for_tracing
+
+        tracer_shell = get_tcsh_for_tracing(shell_path) or shutil.which("tcsh")
+    else:
+        tracer_shell = shell_path or shutil.which(family) or shutil.which(f"/bin/{family}")
+
+    for mode in mode_list:
+        if mode not in INVOCATION_MODES:
+            continue
         traced: set[str] = set()
-        args = _mode_args_for_family(family, mode)
-        if shell_path:
-            traced = _run_tracer(family, shell_path, args)
+        args = mode_to_args(family, mode)
+        if tracer_shell:
+            traced = _run_tracer(family, tracer_shell, args)
 
         if not traced and use_cache:
             traced = set(_load_cache(family, mode))
 
-        # combine traced with default candidates
-        candidates = list(DEFAULT_CANDIDATES.get(family, []))
         result: list[str] = []
         seen: set[str] = set()
 
+        # Prioritize traced: when we have traced files, use them as authoritative
         for f in sorted(traced):
             name = os.path.basename(f)
             if name and name not in seen:
                 result.append(name)
                 seen.add(name)
 
-        for c in candidates:
-            if c not in seen:
-                result.append(c)
-                seen.add(c)
-
+        # Always include canonical entry points for the shell
         extra = [f".{family}rc", f".{family}env"]
         for e in extra:
             if e not in seen:
@@ -263,24 +227,23 @@ def discover_startup_files(
     *,
     existing_only: bool = False,
     full_paths: bool = False,
+    modes: list[str] | None = None,
 ) -> list[str]:
     """Backward-compatible wrapper: returns union of all mode lists (deduped)."""
-    modes = discover_startup_files_modes(
+    from .modes import INVOCATION_MODES
+
+    mode_results = discover_startup_files_modes(
         family,
         shell_path=shell_path,
         use_cache=use_cache,
         existing_only=existing_only,
         full_paths=full_paths,
+        modes=modes,
     )
     seen: set[str] = set()
     out: list[str] = []
-    for mode in [
-        "login_interactive",
-        "login_noninteractive",
-        "nonlogin_interactive",
-        "nonlogin_noninteractive",
-    ]:
-        for f in modes.get(mode, []):
+    for mode in INVOCATION_MODES:
+        for f in mode_results.get(mode, []):
             if f not in seen:
                 out.append(f)
                 seen.add(f)

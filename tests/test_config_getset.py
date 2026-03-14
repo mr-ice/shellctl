@@ -128,8 +128,8 @@ class TestConfigSet:
         assert config_get("trace.threshold_secs") is None
 
     def test_set_list(self, _isolate_config):
-        config_set("curated.paths", ["/a", "/b"])
-        assert config_get("curated.paths") == ["/a", "/b"]
+        config_set("compose.paths", ["/a", "/b"])
+        assert config_get("compose.paths") == ["/a", "/b"]
 
 
 # -- config_reset -----------------------------------------------------------
@@ -175,20 +175,20 @@ class TestMergeAppend:
 
     def test_user_list_appends_to_global(self, _isolate_config):
         _, global_cfg = _isolate_config
-        global_cfg.write_text(tomli_w.dumps({"curated": {"paths": ["/global"]}}))
+        global_cfg.write_text(tomli_w.dumps({"compose": {"paths": ["/global"]}}))
         user_cfg, _ = _isolate_config
-        user_cfg.write_text(tomli_w.dumps({"curated": {"paths": ["/user"]}}))
+        user_cfg.write_text(tomli_w.dumps({"compose": {"paths": ["/user"]}}))
         merged = load_merged_config()
-        assert merged["curated"]["paths"] == ["/global", "/user"]
+        assert merged["compose"]["paths"] == ["/global", "/user"]
 
     def test_user_list_without_global(self, _isolate_config):
         user_cfg, _ = _isolate_config
-        user_cfg.write_text(tomli_w.dumps({"curated": {"paths": ["/user"]}}))
+        user_cfg.write_text(tomli_w.dumps({"compose": {"paths": ["/user"]}}))
         merged = load_merged_config()
-        assert merged["curated"]["paths"] == ["/user"]
+        assert merged["compose"]["paths"] == ["/user"]
 
     def test_global_list_without_user(self, _isolate_config):
         _, global_cfg = _isolate_config
-        global_cfg.write_text(tomli_w.dumps({"curated": {"paths": ["/global"]}}))
+        global_cfg.write_text(tomli_w.dumps({"compose": {"paths": ["/global"]}}))
         merged = load_merged_config()
-        assert merged["curated"]["paths"] == ["/global"]
+        assert merged["compose"]["paths"] == ["/global"]

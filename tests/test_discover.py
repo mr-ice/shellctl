@@ -15,3 +15,10 @@ def test_discover_returns_candidates_for_zsh(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     files = discover_startup_files("zsh", shell_path=None, use_cache=False)
     assert any(f.startswith(".zsh") for f in files)
+
+
+def test_discover_returns_candidates_for_tcsh(tmp_path, monkeypatch):
+    """Test that discover_startup_files returns expected candidates for tcsh family."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    files = discover_startup_files("tcsh", shell_path=None, use_cache=False)
+    assert ".tcshrc" in files or ".cshrc" in files or ".login" in files

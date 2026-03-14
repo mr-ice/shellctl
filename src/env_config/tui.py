@@ -1032,6 +1032,110 @@ def display_restore_tui(backup_dir: Path | None = None) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Curated pick TUI
+# ---------------------------------------------------------------------------
+
+
+def display_compose_pick_tui(family: str) -> list[str]:
+    """Interactive TUI for selecting and installing compose files.
+
+    Shows available compose files with summaries. Selected files are
+    copied to the user's home directory and the registry is updated.
+
+    Parameters
+    ----------
+    family : str
+        Shell family (zsh, bash, tcsh).
+
+    Returns
+    -------
+    list[str]
+        Absolute paths of installed files (empty if cancelled).
+    """
+    from .compose import install_compose_files, list_compose_files
+
+    files = list_compose_files(family)
+    if not files:
+        return []
+
+    # Build labels: dest_basename + truncated summary
+    labels = [f"{cf.dest_basename}  {cf.summary[:50]}" for cf in files]
+    state = ChecklistState(items=labels, checked=[False] * len(files))
+
+    installed: list[str] = []
+
+    def _wrapper(stdscr):
+        nonlocal installed
+        curses.curs_set(0)
+        status = ""
+
+        def _draw():
+            n_sel = sum(state.checked)
+            extra = [
+                f"Family: {family}    Files: {n_sel} selected / {len(files)} total",
+            ]
+            if status:
+                extra.append(status)
+            _draw_checklist(
+                stdscr,
+                state,
+                title="env-config: select compose files to install",
+                subtitle="Space: toggle  a: all  n: none  Enter: install  q: quit",
+                footer="q=quit  Space=toggle  a=all  n=none  Enter=install",
+                extra_lines=extra,
+            )
+
+        def _confirm(prompt: str) -> bool:
+            stdscr.clear()
+            stdscr.border()
+            try:
+                stdscr.addstr(2, 2, prompt)
+                stdscr.addstr(4, 2, "y=yes  n=no")
+            except curses.error:
+                pass
+            stdscr.refresh()
+            while True:
+                ch = stdscr.getch()
+                if ch in (ord("y"), ord("Y")):
+                    return True
+                if ch in (ord("n"), ord("N")):
+                    return False
+
+        _draw()
+        while True:
+            ch = stdscr.getch()
+            h, w = stdscr.getmaxyx()
+            display_lines = h - 10
+
+            _checklist_nav(ch, state, display_lines)
+
+            if ch in (ord("q"), ord("Q")):
+                break
+
+            if ch in (curses.KEY_ENTER, 10, 13):
+                selected_files = [files[i] for i, c in enumerate(state.checked) if c]
+                if not selected_files:
+                    status = "No files selected"
+                    _draw()
+                    continue
+
+                if _confirm(f"Install {len(selected_files)} file(s) to home directory?"):
+                    try:
+                        installed = install_compose_files(selected_files)
+                        status = f"Installed {len(installed)} file(s)"
+                    except Exception as exc:
+                        status = f"Error: {exc}"
+                    _draw()
+                    stdscr.getch()
+                    break
+
+            _draw()
+
+    curses.wrapper(_wrapper)
+    return installed
+
+
+# ---------------------------------------------------------------------------
 # Config editor helpers (testable without curses)
 # ---------------------------------------------------------------------------
 

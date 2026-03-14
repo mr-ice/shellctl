@@ -20,3 +20,16 @@ def test_discover_uses_shell_trace_mock(monkeypatch):
     modes = discover_startup_files_modes("bash", shell_path="/bin/bash", use_cache=False)
     # expect that mock traces expose files like .bash_profile or .bashrc
     assert any(any(name in (".bash_profile", ".bashrc") for name in modes[m]) for m in modes)
+
+
+def test_discover_tcsh_uses_shell_trace_mock(monkeypatch):
+    """Force use of shell-level tracer for tcsh and ensure mock traces expose expected files."""
+    fixtures = os.path.join(os.getcwd(), "tests", "fixtures", "traces")
+    monkeypatch.setenv("ENVCONFIG_MOCK_TRACE_DIR", fixtures)
+    monkeypatch.setenv("ENVCONFIG_USE_SHELL_TRACE", "1")
+
+    modes = discover_startup_files_modes("tcsh", shell_path="/bin/tcsh", use_cache=False)
+    # expect that mock traces expose .cshrc or .login
+    assert any(
+        any(name in (".cshrc", ".login", ".tcshrc") for name in modes[m]) for m in modes
+    )

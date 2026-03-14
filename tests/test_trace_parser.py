@@ -52,3 +52,16 @@ anothercmd /home/user/.zshenv
     assert any("zshrc" in p for p in paths)
     assert any("zprofile" in p for p in paths)
     assert any("zshenv" in p for p in paths)
+
+
+def test_parse_tcsh_trace():
+    """Test parsing tcsh trace (TCSH_XTRACEFD format with timestamped source lines)."""
+    trace = """
++1613341234.050000 source /home/testuser/.cshrc
++1613341234.300000 source /home/testuser/.login
++1613341234.500000 echo done
+"""
+    res = parse_trace(trace, family="tcsh")
+    paths = [ft.path for ft in res]
+    assert any("cshrc" in p for p in paths)
+    assert any("login" in p for p in paths)

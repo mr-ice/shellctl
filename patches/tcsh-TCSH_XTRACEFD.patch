@@ -1,0 +1,116 @@
+From: Env-Config Project <env-config@local>
+Date: Mon, 24 Feb 2025 00:00:00 +0000
+Subject: [PATCH] Add TCSH_XTRACEFD support for tracing to a file descriptor
+
+Add BASH_XTRACEFD-like support: when the environment variable
+TCSH_XTRACEFD is set to a valid open file descriptor, xtrace (-x)
+output is written to that fd instead of stderr.  Each traced command
+line is prefixed with a timestamp (seconds.microseconds) for
+correlation with file activity traces.
+
+Example usage:
+  exec 3>/tmp/tcsh-trace.log
+  TCSH_XTRACEFD=3 tcsh -x -f -c 'echo hello; ls'
+
+---
+ sh.h      |  1 +
+ sh.c      | 26 ++++++++++++++++++
+ sh.exec.c | 36 ++++++++++++++++++++++++
+ 3 files changed, 63 insertions(+)
+
+diff --git a/sh.h b/sh.h
+index f4f1324..d66688c 100644
+--- a/sh.h
++++ b/sh.h
+@@ -667,6 +667,7 @@ EXTERN int   SHIN IZERO;	/* Current shell input (script) */
+ EXTERN int   SHOUT IZERO;	/* Shell output */
+ EXTERN int   SHDIAG IZERO;	/* Diagnostic output... shell errs go here */
+ EXTERN int   OLDSTD IZERO;	/* Old standard input (def for cmds) */
++EXTERN int   tcsh_xtracefd IZERO;	/* FD for xtrace when TCSH_XTRACEFD set (BASH_XTRACEFD-like) */
+ 
+ 
+ #if (SYSVREL == 4 && defined(_UTS)) || defined(__linux__)
+diff --git a/sh.c b/sh.c
+index 84072b8..0aa9163 100644
+--- a/sh.c
++++ b/sh.c
+@@ -480,6 +480,9 @@ main(int argc, char **argv)
+      * prefer to use these.
+      */
+     initdesc();
++#ifndef WINNT_NATIVE
++    init_tcsh_xtracefd();
++#endif
+ 
+     cdtohome = 1;
+     setv(STRcdtohome, SAVE(""), VAR_READWRITE);
+@@ -2406,6 +2409,25 @@ initdesc(void)
+ #endif /* NLS_BUGS */
+ }
+ 
++#ifndef WINNT_NATIVE
++static void
++init_tcsh_xtracefd(void)
++{
++    char *p;
++    int fd;
++
++    if ((p = getenv("TCSH_XTRACEFD")) == NULL || *p == '\0')
++	return;
++    fd = atoi(p);
++    if (fd < 0)
++	return;
++    /* Check that the fd is open and writable (like bash) */
++    if (fcntl(fd, F_GETFD) == -1)
++	return;
++    tcsh_xtracefd = fd;
++}
++#endif /* !WINNT_NATIVE */
++
+ 
+ void
+ #ifdef PROF
+diff --git a/sh.exec.c b/sh.exec.c
+index ba4958f..cd55ac9 100644
+--- a/sh.exec.c
++++ b/sh.exec.c
+@@ -35,6 +35,9 @@
+ #ifdef WINNT_NATIVE
+ #include <nt.const.h>
+ #endif /*WINNT_NATIVE*/
++#ifndef WINNT_NATIVE
++#include <sys/time.h>
++#endif
+ 
+ /*
+  * C shell
+@@ -622,6 +625,29 @@ xechoit(Char **t)
+ 	flush();
+ 	haderr = 1;
+ 	didfds = 0;
++#ifndef WINNT_NATIVE
++	if (tcsh_xtracefd >= 0) {
++	    Char *cp;
++	    char *cmd;
++	    char *line;
++	    struct timeval tv;
++
++	    cp = blkexpand(t);
++	    cmd = short2str(cp);
++	    xfree(cp);
++	    if (cmd && *cmd) {
++		if (gettimeofday(&tv, NULL) == 0)
++		    line = xasprintf("+%ld.%06ld %s\n",
++			(long)tv.tv_sec, (long)tv.tv_usec, cmd);
++		else
++		    line = xasprintf("+ %s\n", cmd);
++		if (line) {
++		    (void) xwrite(tcsh_xtracefd, line, strlen(line));
++		    xfree(line);
++		}
++	    }
++	} else
++#endif
+ 	blkpr(t), xputchar('\n');
+ 	flush();
+ 	didfds = odidfds;

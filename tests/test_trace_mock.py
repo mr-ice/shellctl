@@ -30,3 +30,14 @@ def test_run_shell_trace_zsh_mock(monkeypatch):
     parsed = parse_trace(raw, family="zsh")
     analysis = analyze_traces(parsed, threshold_secs=0.001)
     assert analysis["total"] >= 0
+
+
+def test_run_shell_trace_tcsh_mock(monkeypatch):
+    """Test that run_shell_trace returns mock data for tcsh when ENVCONFIG_MOCK_TRACE_DIR is set."""
+    fixtures = os.path.join(os.getcwd(), "tests", "fixtures", "traces")
+    monkeypatch.setenv("ENVCONFIG_MOCK_TRACE_DIR", fixtures)
+    raw = run_shell_trace("tcsh", args=["-l", "-c", "true"])
+    assert "cshrc" in raw or "login" in raw
+    parsed = parse_trace(raw, family="tcsh")
+    analysis = analyze_traces(parsed, threshold_secs=0.001)
+    assert analysis["total"] >= 0

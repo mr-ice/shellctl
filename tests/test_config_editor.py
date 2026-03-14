@@ -60,7 +60,11 @@ class TestValidateEditorConfig:
             "trace": {"threshold_secs": 0.1, "threshold_percent": 25.0},
             "tui": {"page_size": 30},
             "repo": {"url": "https://example.com/repo.git", "destination": "/tmp/repo"},
-            "curated": {"paths": ["/a", "/b"], "shell_rc_files": ["zshrc", "zshenv"]},
+            "compose": {
+                "paths": ["/a", "/b"],
+                "shell_rc_files": ["zshrc", "zshenv"],
+                "allow_non_repo": "false",
+            },
         }
         p = tmp_path / "cfg.toml"
         p.write_text(tomli_w.dumps(data))

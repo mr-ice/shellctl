@@ -1,16 +1,36 @@
 """Command-line interface for env-config (scaffold)."""
 from __future__ import annotations
 
+import tabulate
 import argparse
+import logging
 import os
 import sys
 
 from .detect_shell import detect_current_and_intended_shell
 
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
+def _configure_logging(level: str) -> None:
+    """Configure logging for the env-config package."""
+    numeric = getattr(logging, level.upper(), logging.WARNING)
+    logging.basicConfig(
+        level=numeric,
+        format="%(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser for the CLI."""
     p = argparse.ArgumentParser(prog="env-config")
+    p.add_argument(
+        "--log-level",
+        choices=LOG_LEVELS,
+        default="WARNING",
+        help="Set logging level (default: WARNING)",
+    )
     sub = p.add_subparsers(dest="cmd")
 
     detect_p = sub.add_parser("detect", help="Detect current and intended shell")
@@ -19,6 +39,13 @@ def build_parser() -> argparse.ArgumentParser:
     disc = sub.add_parser("discover", help="Discover startup files for a shell family")
     disc.add_argument("--family", help="Shell family (bash, zsh, tcsh)")
     disc.add_argument("--shell-path", help="Path to shell executable to use for tracing")
+    disc.add_argument(
+        "--user-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Only show user startup files (Default true)",
+    )
+
     disc.add_argument(
         "--use-shell-trace",
         action="store_true",
@@ -31,18 +58,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     disc.add_argument(
         "--existing-only",
-        action="store_true",
-        help="Only show startup files that currently exist on disk",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Only show startup files that currently exist on disk (Default true)",
     )
     disc.add_argument(
         "--full-paths",
-        action="store_true",
-        help="Show full absolute paths instead of basenames",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Show full absolute paths instead of basenames (Default true)",
     )
     disc.add_argument(
         "--modes",
-        action="store_true",
-        help="Show per-invocation-mode discovery (login/interactive combos)",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Show per-invocation-mode discovery (Default: true)",
+    )
+    disc.add_argument(
+        "--mode",
+        action="append",
+        dest="mode_filters",
+        metavar="MODE",
+        help="Mode(s) to discover: li, ln, ni, nn, or full names. Repeat for multiple. Default: all",
     )
     disc.add_argument("--tui", action="store_true", help="Show discovery in the TUI")
     trace_p = sub.add_parser(
@@ -52,10 +89,8 @@ def build_parser() -> argparse.ArgumentParser:
     trace_p.add_argument("--shell-path", help="Path to shell executable to use for tracing")
     trace_p.add_argument(
         "--mode",
-        help=(
-            "Invocation mode: login_interactive, login_noninteractive, nonlogin_interactive, "
-            "nonlogin_noninteractive"
-        ),
+        metavar="MODE",
+        help="Mode: li, ln, ni, nn (or full names). Short tags: li=login_interactive, ln=login_noninteractive, ni=nonlogin_interactive, nn=nonlogin_noninteractive",
     )
     trace_p.add_argument(
         "--dry-run", action="store_true", help="Print the tracer command and do not execute it"
@@ -80,7 +115,12 @@ def build_parser() -> argparse.ArgumentParser:
     config_p.add_argument("--tui", action="store_true", help="Open TUI config editor")
     config_sub = config_p.add_subparsers(dest="config_cmd")
 
-    config_sub.add_parser("show", help="Show all config values with defaults")
+    show_p = config_sub.add_parser("show", help="Show config values (all or one key)")
+    show_p.add_argument(
+        "key",
+        nargs="?",
+        help="Optional dotted key to show just that value (e.g. compose.paths)",
+    )
 
     get_p = config_sub.add_parser("get", help="Get a config value")
     get_p.add_argument("key", help="Dotted config key (e.g. trace.threshold_secs)")
@@ -143,6 +183,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list-backups", help="List available backup archives")
 
+    # --- compose ---
+    compose_p = sub.add_parser(
+        "compose",
+        help="Pick and install optional shell init files from compose paths",
+    )
+    compose_p.add_argument("--family", help="Shell family (bash, zsh, tcsh)")
+    compose_sub = compose_p.add_subparsers(dest="compose_cmd")
+
+    compose_sub.add_parser("list", help="List available compose files with summaries")
+    pick_p = compose_sub.add_parser("pick", help="Select and install compose files")
+    pick_p.add_argument(
+        "files",
+        nargs="*",
+        help="Install by dest basename (e.g. .zshrc-fzf). Omit for TUI.",
+    )
+    pick_p.add_argument("--tui", action="store_true", help="Interactive selection TUI")
+    pick_p.add_argument("--yes", action="store_true", help="Skip confirmation")
+
     return p
 
 
@@ -160,14 +218,20 @@ def _validate_config_key(key: str) -> bool:
     return False
 
 
-def _handle_config_show() -> int:
-    """Print all config keys with their merged values."""
-    from .config import CONFIG_SCHEMA, config_show
+def _handle_config_show(key: str | None = None) -> int:
+    """Print config values: all keys if key is None, else just that key's value."""
+    from .config import CONFIG_SCHEMA, config_get, config_show
+
+    if key is not None:
+        if not _validate_config_key(key):
+            return 1
+        print(repr(config_get(key)))
+        return 0
 
     values = config_show()
-    for key in sorted(values):
-        meta = CONFIG_SCHEMA[key]
-        print(f"{key} = {values[key]!r}  # {meta.description}")
+    for k in sorted(values):
+        meta = CONFIG_SCHEMA[k]
+        print(f"{k} = {values[k]!r}  # {meta.description}")
     return 0
 
 
@@ -247,7 +311,7 @@ def _handle_config(args: argparse.Namespace) -> int:
 
     config_cmd = getattr(args, "config_cmd", None)
     if config_cmd == "show":
-        return _handle_config_show()
+        return _handle_config_show(getattr(args, "key", None))
     if config_cmd == "get":
         return _handle_config_get(args.key)
     if config_cmd == "set":
@@ -255,7 +319,7 @@ def _handle_config(args: argparse.Namespace) -> int:
     if config_cmd == "reset":
         return _handle_config_reset(args.key)
 
-    print("usage: env-config config {show,get,set,reset} ...", file=sys.stderr)
+    print("usage: env-config config {show,get,set,reset} [key] ...", file=sys.stderr)
     return 1
 
 
@@ -448,6 +512,83 @@ def _handle_restore(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_compose(args: argparse.Namespace) -> int:
+    """Dispatch compose subcommands (list, pick)."""
+    compose_cmd = getattr(args, "compose_cmd", None)
+    family = _resolve_family(args)
+
+    if compose_cmd == "list":
+        return _handle_compose_list(family)
+    if compose_cmd == "pick":
+        return _handle_compose_pick(args, family)
+
+    print("usage: env-config compose {list,pick} ...", file=sys.stderr)
+    return 1
+
+
+def _handle_compose_list(family: str) -> int:
+    """List available compose files with summaries."""
+    from .compose import list_compose_files
+
+    files = list_compose_files(family)
+    if not files:
+        print("No compose files found. Configure compose.paths in config.")
+        return 0
+    for cf in files:
+        print(f"  {cf.dest_basename}")
+        print(f"    {cf.summary}")
+        print(f"    source: {cf.source_path}")
+    return 0
+
+
+def _handle_compose_pick(args: argparse.Namespace, family: str) -> int:
+    """Select and install compose files (TUI or by name)."""
+    from .compose import install_compose_files, list_compose_files
+
+    if getattr(args, "tui", False):
+        try:
+            from .tui import display_compose_pick_tui
+
+            installed = display_compose_pick_tui(family)
+            if installed:
+                print(f"Installed {len(installed)} file(s) to home directory")
+            return 0
+        except Exception as exc:
+            print(f"TUI failed: {exc}", file=sys.stderr)
+            return 1
+
+    names = getattr(args, "files", None) or []
+    if not names:
+        print("Specify file(s) to install (e.g. .zshrc-fzf) or use --tui", file=sys.stderr)
+        return 1
+
+    available = list_compose_files(family)
+    by_dest = {cf.dest_basename: cf for cf in available}
+    selections: list = []
+    for n in names:
+        # Allow .zshrc-fzf or zshrc-fzf
+        dest = n if n.startswith(".") else f".{n}"
+        if dest not in by_dest:
+            print(f"error: unknown compose file '{n}'", file=sys.stderr)
+            return 1
+        selections.append(by_dest[dest])
+
+    if not getattr(args, "yes", False):
+        print("Will install:")
+        for cf in selections:
+            print(f"  {cf.source_path} -> ~/{cf.dest_basename}")
+        answer = input("Proceed? [y/N] ").strip().lower()
+        if answer != "y":
+            print("cancelled")
+            return 1
+
+    installed = install_compose_files(selections)
+    print(f"Installed {len(installed)} file(s):")
+    for p in installed:
+        print(f"  {p}")
+    return 0
+
+
 def _handle_list_backups() -> int:
     """Handle the ``list-backups`` subcommand."""
     from .backup import list_archives, read_manifest
@@ -474,10 +615,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    _configure_logging(getattr(args, "log_level", "WARNING"))
+
     if args.cmd == "detect":
         d = detect_current_and_intended_shell(cli_arg=getattr(args, "shell", None))
-        for k, v in d.items():
-            print(f"{k}: {v}")
+        # print(tabulate.tabulate_formats)
+        print(tabulate.tabulate(d.items(), headers=["Source", "Shell"], tablefmt="mixed_outline"))
         return 0
 
     if args.cmd == "tui":
@@ -489,15 +632,11 @@ def main(argv: list[str] | None = None) -> int:
 
         family = getattr(args, "family", None)
         shell_path = getattr(args, "shell_path", None)
+        info = detect_current_and_intended_shell(cli_arg=shell_path)
         if not family:
-            # detect intended shell and use its family when --family omitted
-            # pass the provided shell_path as CLI override so detection
-            # logic is identical to the `detect` command.
-            info = detect_current_and_intended_shell(cli_arg=shell_path)
             family = info.get("intended_family")
-            # prefer detected shell path if shell_path not supplied
-            if shell_path is None:
-                shell_path = info.get("intended_shell")
+        if shell_path is None:
+            shell_path = info.get("intended_shell")
         # honor CLI flag to force shell-level tracer
         if getattr(args, "use_shell_trace", False):
             os.environ["ENVCONFIG_USE_SHELL_TRACE"] = "1"
@@ -512,11 +651,15 @@ def main(argv: list[str] | None = None) -> int:
                 from .discover import clear_cache
 
                 clear_cache(family)
+            from .modes import resolve_modes
+
+            mode_list = resolve_modes(getattr(args, "mode_filters", None))
             modes = discover_startup_files_modes(
                 family,
                 shell_path=shell_path,
                 existing_only=getattr(args, "existing_only", False),
                 full_paths=getattr(args, "full_paths", False),
+                modes=mode_list if mode_list else None,
             )
             if getattr(args, "tui", False):
                 try:
@@ -561,15 +704,12 @@ def main(argv: list[str] | None = None) -> int:
             family = family.lower()
         if not family:
             family = "bash"
-        mode = getattr(args, "mode", None) or "login_noninteractive"
-        # map mode string to args
-        mode_map = {
-            "login_interactive": ["-l", "-i", "-c", "true"],
-            "login_noninteractive": ["-l", "-c", "true"],
-            "nonlogin_interactive": ["-i", "-c", "true"],
-            "nonlogin_noninteractive": ["-c", "true"],
-        }
-        args_list = mode_map.get(mode, ["-l", "-c", "true"])
+        from .modes import mode_to_args, resolve_modes
+
+        mode_spec = getattr(args, "mode", None) or "ln"
+        resolved = resolve_modes(mode_spec)
+        mode = resolved[0] if resolved else "login_noninteractive"
+        args_list = mode_to_args(family, mode, exit_cmd="true")
         dry = getattr(args, "dry_run", False)
         out_file = getattr(args, "output_file", None)
         # load merged config defaults when thresholds not specified on CLI
@@ -639,6 +779,9 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_restore(args)
     if args.cmd == "list-backups":
         return _handle_list_backups()
+
+    if args.cmd == "compose":
+        return _handle_compose(args)
 
     parser.print_help()
     return 0

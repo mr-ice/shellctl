@@ -17,7 +17,7 @@ Run the CLI (example):
 ```bash
 env-config detect
 env-config discover --family bash --modes
-env-config trace --family bash --mode login_noninteractive --dry-run
+env-config trace --family bash --mode ln --dry-run
 env-config trace --family bash --mode login_noninteractive --tui
 ```
 
@@ -32,6 +32,16 @@ Clear discovery cache:
 ```bash
 env-config discover --refresh-cache
 ```
+
+## Logging
+
+Use `--log-level` to control verbosity (applies to all commands):
+
+```bash
+env-config --log-level DEBUG compose list
+```
+
+Levels: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: WARNING).
 
 ## Environment variables
 
@@ -50,9 +60,9 @@ env-config discover --refresh-cache
   [src/env_config/detect_shell.py](src/env_config/detect_shell.py)
 - `discover` — discover candidate startup files (per-mode or union). Flags:
   `--family`, `--shell-path`, `--use-shell-trace`, `--refresh-cache`,
-  `--modes`. See [src/env_config/discover.py](src/env_config/discover.py).
+  `--modes`, `--mode` (li/ln/ni/nn or full names, repeatable). See [src/env_config/discover.py](src/env_config/discover.py).
 - `trace` — run a shell-level trace and summarize per-file timing. Flags:
-  `--family`, `--shell-path`, `--mode`, `--dry-run`, `--output-file`,
+  `--family`, `--shell-path`, `--mode` (li/ln/ni/nn), `--dry-run`, `--output-file`,
   `--threshold-secs`, `--threshold-percent`, `--tui`. Core tracing/parsing is in
   [src/env_config/trace.py](src/env_config/trace.py).
 - `backup` — back up discovered startup files to a tar.gz archive. Flags:
@@ -63,6 +73,8 @@ env-config discover --refresh-cache
   `--archive`, `--include`, `--exclude`, `--force`, `--yes`, `--tui`.
 - `list-backups` — list available backup archives with timestamps and
   file contents.
+- `compose` — pick and install optional shell init files from compose paths.
+  Subcommands: `list`, `pick` (with `--tui` for interactive selection).
 
 ## Testing
 
@@ -92,7 +104,7 @@ discovery/trace code paths using these fixtures set `ENVCONFIG_MOCK_TRACE_DIR`.
 # env-config
 
 env-config is a tool to manage shell
-startup files (login/profile/rc files), back them up, and include curated startup files from directories given in the config.
+startup files (login/profile/rc files), back them up, and include compose startup files from directories given in the config.
 
 Current implemented features (prototype)
 
@@ -143,6 +155,7 @@ View all config keys and their current (merged) values:
 
 ```bash
 env-config config show
+env-config config show compose.paths   # show just one key's value
 ```
 
 Get a single key:
@@ -171,10 +184,10 @@ env-config config set repo.url https://example.com/dotfiles.git
 env-config config set trace.threshold_secs null
 
 # list of strings (space-separated)
-env-config config set curated.paths /opt/shell-extras /usr/local/etc/env
+env-config config set compose.paths /opt/shell-extras /usr/local/etc/env
 
 # append to an existing list instead of replacing it
-env-config config set curated.paths /another/path --append
+env-config config set compose.paths /another/path --append
 ```
 
 Reset a key (removes it from the user config, reverting to the
@@ -280,5 +293,5 @@ PYTHONPATH=src python -m env_config.cli trace --family zsh --mode login_noninter
 
 Next features to implement
 
-- Repo init/install for curated startup files.
+- Repo init/install for compose startup files.
 - Additional shell-family improvements and safer tracer mocks for CI.
