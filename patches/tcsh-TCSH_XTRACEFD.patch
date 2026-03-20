@@ -34,7 +34,17 @@ diff --git a/sh.c b/sh.c
 index 84072b8..0aa9163 100644
 --- a/sh.c
 +++ b/sh.c
-@@ -480,6 +480,9 @@ main(int argc, char **argv)
+@@ -145,6 +145,9 @@ static	int		  srccat	(Char *, Char *);
+ static	int		  srcfile	(const char *, int, int, Char **);
+ #endif /*WINNT_NATIVE*/
+ static	void		  srcunit	(int, int, int, Char **);
++#ifndef WINNT_NATIVE
++static	void		  init_tcsh_xtracefd	(void);
++#endif
+ static	void		  mailchk	(void);
+ #ifndef _PATH_DEFPATH
+ static	Char	 	**defaultpath	(void);
+@@ -480,6 +483,9 @@ main(int argc, char **argv)
       * prefer to use these.
       */
      initdesc();

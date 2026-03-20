@@ -1,0 +1,24 @@
+---
+description: FreeCAD .FCMacro structure, 1.0.2+ only, derive measurements from fit specs
+globs: "**/*.FCMacro"
+alwaysApply: false
+---
+
+# FreeCAD Macros
+
+When FreeCAD is indicated, create `.FCMacro` files that:
+
+1. **Close and re-open** the active document
+2. **Call methods** to create the objects described
+3. **Reload all Python files** on running
+
+## Version
+
+- Target **FreeCAD 1.0.2 or later**
+- Do not use features or commands that exist only in earlier versions
+
+## Measurements
+
+- **Design measurements** – Store in config (`config.py`, `config.yaml`, etc.) as the source of truth for the overall design.
+- **"Off by" / adjustment measurements** – When cutting, joining, or aligning parts, the user may give "off by X mm" or similar. These are *not* stored in config. Use them only to compute the actual dimensions (tolerance, clearance, offset) at that moment.
+- **Ask** if the fit, geometry, or intent is unclear.

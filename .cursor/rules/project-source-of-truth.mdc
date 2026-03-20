@@ -1,0 +1,11 @@
+---
+description: Read PROJECT.md for specs; ask when unclear; update rules and PROJECT.md when given new instructions
+alwaysApply: true
+---
+
+# Project Source of Truth
+
+- **Read `PROJECT.md`** for instructions, descriptions, and specifications before working on the project.
+- **Ask questions** when requirements are inconsistent, unclear, or you cannot proceed confidently.
+- **Write or rewrite rules** in `.cursor/rules/` to clarify conventions when they would help.
+- **Add or update `PROJECT.md`** when the user gives new instructions that should become permanent project specs.

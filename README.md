@@ -115,15 +115,18 @@ Current implemented features (prototype)
   - optional CLI override `--shell`
 
 - `discover`: best-effort discovery of startup files used by shell
-  families. Provides a fallback curated list and a tracer-backed
-  discovery mode (if `strace` present). Use `--modes` to list files
+  families. Defaults to shell-level tracing (portable). Optional
+  `ENVCONFIG_USE_SYSTEM_TRACER=1` uses `strace` on Linux when available.
+  Use `--modes` to list files
   for four invocation modes: `login_interactive`, `login_noninteractive`,
   `nonlogin_interactive`, `nonlogin_noninteractive`.
 
 - `trace`: run a non-privileged shell-level trace to capture which
   startup files are sourced and approximate time spent in each file.
   - Supports `bash`, `zsh`, and `tcsh` families.
-  - Uses `BASH_XTRACEFD` + `PS4` for `bash` to capture timestamps.
+  - Uses `BASH_XTRACEFD` + `PS4` for `bash` to capture timestamps; a patched
+    bash (`patches/bash-sourcetrace.patch`, `ENVCONFIG_BASH_PATH`) adds
+    per-file `<sourcetrace>` lines like zsh’s `SOURCE_TRACE`.
   - Uses `-x` capture of stderr for `zsh`/`tcsh` and best-effort parsing.
   - Analyze results to compute per-file duration and percent of total.
   - Thresholds: `--threshold-secs` and `--threshold-percent` to flag slow files.

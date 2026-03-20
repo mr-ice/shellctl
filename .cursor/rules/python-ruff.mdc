@@ -1,0 +1,28 @@
+---
+description: Python 3.10+, ruff format/check with numpy docstyle
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Python & Ruff
+
+- **Python**: Prefer 3.10 or later.
+- **Formatting**: Use `ruff format`.
+- **Linting**: Use `ruff check`.
+
+**Ruff configuration** (pyproject.toml or ruff.toml):
+
+```toml
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "D", "UP"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+```
+
+`"D"` enables docstring checks; `convention = "numpy"` uses the NumPy docstring style.
+
+```bash
+ruff format .
+ruff check .
+```

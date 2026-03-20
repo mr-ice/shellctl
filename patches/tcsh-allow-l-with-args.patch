@@ -1,0 +1,16 @@
+diff --git a/sh.c b/sh.c
+--- a/sh.c	2026-03-19 20:50:10
++++ b/sh.c	2026-03-19 20:50:10
+@@ -980,6 +980,12 @@
+ 	    case 'i':		/* -i	Interactive, even if !intty */
+ 		intact = 1;
+ 		nofile = 1;
++		break;
++
++	    case 'l':		/* -l	Login shell (allow with -c, -i for scripting) */
++		loginsh = 1;
++		(void) time(&chktim);
++		setNS(STRloginsh);
+ 		break;
+ 
+ 	    case 'm':		/* -m	read .cshrc (from su) */

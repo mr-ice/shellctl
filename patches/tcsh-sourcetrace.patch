@@ -1,0 +1,62 @@
+diff --git a/sh.h b/sh.h
+--- a/sh.h	2026-03-19 21:11:32
++++ b/sh.h	2026-03-19 21:11:32
+@@ -670,7 +670,12 @@
+ EXTERN int   tcsh_xtracefd IZERO;	/* FD for xtrace when TCSH_XTRACEFD set (BASH_XTRACEFD-like) */
+ EXTERN const char *tcsh_xtrace_srcfile;	/* Current source file path for xtrace (NULL when not in source) */
+ 
++#ifndef WINNT_NATIVE
++void		  tcsh_xtrace_sourcetrace	(const char *);
++#endif
+ 
++
++
+ #if (SYSVREL == 4 && defined(_UTS)) || defined(__linux__)
+ /*
+  * From: fadden@uts.amdahl.com (Andy McFadden)
+diff --git a/sh.c b/sh.c
+--- a/sh.c	2026-03-19 21:11:32
++++ b/sh.c	2026-03-19 21:11:32
+@@ -1575,6 +1575,9 @@
+     cleanup_until(&unit);
+ 
+     (void) close_on_exec(unit, 1);
++#ifndef WINNT_NATIVE
++    tcsh_xtrace_sourcetrace(f);
++#endif
+     srcunit(unit, onlyown, flag, av, f);
+     return 1;
+ }
+diff --git a/sh.exec.c b/sh.exec.c
+--- a/sh.exec.c	2026-03-19 21:11:32
++++ b/sh.exec.c	2026-03-19 21:11:32
+@@ -615,7 +615,29 @@
+     doexec(kp, 1);
+ 
+     cleanup_until(&state);
++}
++
++#ifndef WINNT_NATIVE
++void
++tcsh_xtrace_sourcetrace(const char *path)
++{
++    char *line;
++    struct timeval tv;
++
++    if (tcsh_xtracefd < 0 || path == NULL || *path == '\0')
++	return;
++    if (gettimeofday(&tv, NULL) == 0)
++	line = xasprintf("+%ld.%06ld %s <sourcetrace>\n",
++	    (long)tv.tv_sec, (long)tv.tv_usec, path);
++    else
++	line = xasprintf("+ %s <sourcetrace>\n", path);
++    if (line) {
++	(void) xwrite(tcsh_xtracefd, line, strlen(line));
++	xfree(line);
++    }
+ }
++
++#endif /* !WINNT_NATIVE */
+ 
+ void
+ xechoit(Char **t)

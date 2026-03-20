@@ -1,0 +1,52 @@
+--- a/externs.h
++++ b/externs.h
+@@ -62,6 +62,7 @@ extern void xtrace_init PARAMS((void));
+ extern void xtrace_set PARAMS((int, FILE *));
+ #endif
+ extern void xtrace_fdchk PARAMS((int));
++extern void xtrace_source_trace PARAMS((const char *));
+ extern void xtrace_reset PARAMS((void));
+ extern char *indirection_level_string PARAMS((void));
+ extern void xtrace_print_assignment PARAMS((char *, char *, int, int));
+--- a/print_cmd.c
++++ b/print_cmd.c
+@@ -434,7 +434,20 @@ xtrace_reset ()
+   xtrace_fp = stderr;
+ }
+ 
++/* Announce each sourced file (zsh SOURCE_TRACE analog).  Always emitted when
++   a file is read via _evalfile(); lines match env-config parse_bash_trace. */
+ void
++xtrace_source_trace (filename)
++     const char *filename;
++{
++  if (filename == 0)
++    return;
++  CHECK_XTRACE_FP;
++  fprintf (xtrace_fp, "+0.000000 %s:1 <sourcetrace>\n", filename);
++  fflush (xtrace_fp);
++}
++
++void
+ xtrace_fdchk (fd)
+      int fd;
+ {
+--- a/builtins/evalfile.c
++++ b/builtins/evalfile.c
+@@ -177,6 +177,7 @@ _evalfile (filename, flags)
+ 
+   if (nr == 0)
+     {
++      xtrace_source_trace (filename);
+       free (string);
+       return ((flags & FEVAL_BUILTIN) ? EXECUTION_SUCCESS : 1);
+     }
+@@ -232,6 +233,8 @@ _evalfile (filename, flags)
+   return_catch_flag++;
+   sourcelevel++;
+ 
++  xtrace_source_trace (filename);
++
+ #if defined (ARRAY_VARS)
+   array_push (bash_source_a, (char *)filename);
+   t = itos (executing_line_number ());

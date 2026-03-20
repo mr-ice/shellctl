@@ -1,0 +1,124 @@
+diff --git a/sh.h b/sh.h
+--- a/sh.h	2026-03-19 20:52:34
++++ b/sh.h	2026-03-19 20:52:34
+@@ -668,6 +668,7 @@
+ EXTERN int   SHDIAG IZERO;	/* Diagnostic output... shell errs go here */
+ EXTERN int   OLDSTD IZERO;	/* Old standard input (def for cmds) */
+ EXTERN int   tcsh_xtracefd IZERO;	/* FD for xtrace when TCSH_XTRACEFD set (BASH_XTRACEFD-like) */
++EXTERN const char *tcsh_xtrace_srcfile;	/* Current source file path for xtrace (NULL when not in source) */
+ 
+ 
+ #if (SYSVREL == 4 && defined(_UTS)) || defined(__linux__)
+diff --git a/sh.c b/sh.c
+--- a/sh.c	2026-03-19 20:52:34
++++ b/sh.c	2026-03-19 20:52:34
+@@ -112,6 +112,8 @@
+ char *progname;
+ int tcsh;
+ 
++const char *tcsh_xtrace_srcfile = NULL;
++
+ /*
+  * This preserves the input state of the shell. It is used by
+  * st_save and st_restore to manipulate shell state.
+@@ -138,6 +140,7 @@
+     int	  cantell;
+     struct Bin	  B;
+     int		  justpr;
++    const char *xtrace_srcfile;
+ };
+ 
+ static	int		  srccat	(Char *, Char *);
+@@ -146,7 +149,7 @@
+ #else
+ int		  srcfile	(const char *, int, int, Char **);
+ #endif /*WINNT_NATIVE*/
+-static	void		  srcunit	(int, int, int, Char **);
++static	void		  srcunit	(int, int, int, Char **, const char *);
+ #ifndef WINNT_NATIVE
+ static	void		  init_tcsh_xtracefd	(void);
+ #endif
+@@ -156,7 +159,7 @@
+ #endif
+ static	void		  record	(void);
+ static	void		  st_save	(struct saved_state *, int, int,
+-					 Char **, Char **);
++				 Char **, Char **, const char *);
+ static	void		  st_restore	(void *);
+ 
+ 	int		  main		(int, char **);
+@@ -1566,7 +1569,7 @@
+     cleanup_until(&unit);
+ 
+     (void) close_on_exec(unit, 1);
+-    srcunit(unit, onlyown, flag, av);
++    srcunit(unit, onlyown, flag, av, f);
+     return 1;
+ }
+ 
+@@ -1576,7 +1579,7 @@
+  * fd.
+  */
+ static void
+-st_save(struct saved_state *st, int unit, int hflg, Char **al, Char **av)
++st_save(struct saved_state *st, int unit, int hflg, Char **al, Char **av, const char *srcpath)
+ {
+     st->insource	= insource;
+     st->SHIN		= SHIN;
+@@ -1649,6 +1652,9 @@
+ 	st->argv = NULL;
+     st->av = av;
+ 
++    st->xtrace_srcfile = tcsh_xtrace_srcfile;
++    tcsh_xtrace_srcfile = srcpath;
++
+     SHIN	= unit;	/* Do this first */
+ 
+     /* Establish new input arena */
+@@ -1686,6 +1692,10 @@
+     if (st->SHIN == -1)
+ 	return;
+ 
++#ifndef WINNT_NATIVE
++    tcsh_xtrace_srcfile = st->xtrace_srcfile;
++#endif
++
+     /* Reset input arena */
+     {
+ 	int i;
+@@ -1736,7 +1746,7 @@
+  * we don't chance it.	This occurs on ".cshrc"s and the like.
+  */
+ static void
+-srcunit(int unit, int onlyown, int hflg, Char **av)
++srcunit(int unit, int onlyown, int hflg, Char **av, const char *srcpath)
+ {
+     struct saved_state st;
+ 
+@@ -1762,7 +1772,7 @@
+     }
+ 
+     /* Save the current state and move us to a new state */
+-    st_save(&st, unit, hflg, NULL, av);
++    st_save(&st, unit, hflg, NULL, av, srcpath);
+ 
+     /*
+      * Now if we are allowing commands to be interrupted, we let ourselves be
+diff --git a/sh.exec.c b/sh.exec.c
+--- a/sh.exec.c	2026-03-19 20:52:34
++++ b/sh.exec.c	2026-03-19 20:52:34
+@@ -637,10 +637,11 @@
+ 	    xfree(cp);
+ 	    if (cmd && *cmd) {
+ 		if (gettimeofday(&tv, NULL) == 0)
+-		    line = xasprintf("+%ld.%06ld %s\n",
+-			(long)tv.tv_sec, (long)tv.tv_usec, cmd);
++		    line = xasprintf("+%ld.%06ld %s %s\n",
++			(long)tv.tv_sec, (long)tv.tv_usec,
++			tcsh_xtrace_srcfile ? tcsh_xtrace_srcfile : "-", cmd);
+ 		else
+-		    line = xasprintf("+ %s\n", cmd);
++		    line = xasprintf("+ - %s\n", cmd);
+ 		if (line) {
+ 		    (void) xwrite(tcsh_xtracefd, line, strlen(line));
+ 		    xfree(line);

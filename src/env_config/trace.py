@@ -7,10 +7,13 @@ trace. The parser computes per-startup-file timing information.
 Notes
 -----
 - For `bash` we use `BASH_XTRACEFD` to redirect xtrace to a file and set
-  `PS4` to include timestamps and source file info.
+  `PS4` to include timestamps and source file info.  A patched bash (see
+  `patches/bash-sourcetrace.patch`) emits zsh-like per-file `<sourcetrace>`
+  lines into the same stream.
 - For `tcsh` we use a patched tcsh with `TCSH_XTRACEFD` (see patches/README.md);
   when available, xtrace is redirected to a fd with timestamped lines.
-- For `zsh` we run with `-x` and capture stderr; parsing is best-effort.
+- For `zsh` we run with `-o SOURCE_TRACE -x`, set `PS4=+%N:%i> ` in env,
+  and capture stderr; parsing uses the default PS4 format.
 """
 from __future__ import annotations
 
@@ -44,6 +47,29 @@ class FileTrace:
 def _timestamp_now() -> float:
     """Return current timestamp as float seconds."""
     return time.time()
+
+
+def get_bash_for_tracing(shell_path: str | None = None) -> str | None:
+    """Resolve bash path for tracing. Prefer patched bash with source-trace lines.
+
+    Checks (in order):
+    1. shell_path if provided and executable
+    2. ENVCONFIG_BASH_PATH (patched bash from patches/bash-sourcetrace.patch)
+    3. bash-src/bash if present (local build from project root)
+    4. shutil.which("bash") as fallback (no per-file source trace lines)
+    """
+    import shutil
+
+    if shell_path and os.path.isfile(shell_path) and os.access(shell_path, os.X_OK):
+        return shell_path
+    env_path = os.environ.get("ENVCONFIG_BASH_PATH")
+    if env_path and os.path.isfile(env_path) and os.access(env_path, os.X_OK):
+        return env_path
+    for base in (Path(__file__).resolve().parents[2], Path.cwd()):
+        candidate = base / "bash-src" / "bash"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return shutil.which("bash")
 
 
 def get_tcsh_for_tracing(shell_path: str | None = None) -> str | None:
@@ -86,7 +112,7 @@ def run_shell_trace(
     """
     family = family.lower()
     if family == "bash":
-        shell = shell_path or "bash"
+        shell = shell_path or get_bash_for_tracing(None) or "bash"
     elif family == "zsh":
         shell = shell_path or "zsh"
     else:
@@ -160,8 +186,11 @@ def run_shell_trace(
     # prefix where supported via environment.
     if family == "zsh":
         env = os.environ.copy()
-        env["PS4"] = "+$(date +%s.%N) ${0}:${LINENO} "
-        cmd = [shell, "-x"] + args
+        # Use zsh default PS4 (+%N:%i> ) so user's .zshenv can't override it.
+        # %N = script/function name, %i = line number.
+        env["PS4"] = "+%N:%i> "
+        # SOURCE_TRACE prints each file as it's loaded; needed for proper discovery.
+        cmd = [shell, "-o", "SOURCE_TRACE", "-x"] + args
         if dry_run:
             return "DRYRUN: " + " ".join(shlex.quote(c) for c in cmd)
         proc = subprocess.run(
@@ -245,6 +274,9 @@ def run_shell_trace(
 
 def parse_bash_trace(trace_text: str) -> dict[str, FileTrace]:
     """Parse bash xtrace output produced with PS4 '+$(date +%s.%N) ${BASH_SOURCE}:${LINENO} '.
+
+    Patched bash (bash-sourcetrace) also emits file-entry lines of the form
+    ``+0.000000 /path/to/file:1 <sourcetrace>`` into the xtrace stream.
 
     Returns a mapping from file path to FileTrace.
     """
@@ -355,11 +387,15 @@ def parse_zsh_trace(trace_text: str) -> dict[str, FileTrace]:
 def parse_tcsh_trace(trace_text: str) -> dict[str, FileTrace]:
     """Parse tcsh traces by looking for `source` and timestamped lines.
 
+    Patched tcsh emits ``+timestamp /path <sourcetrace>`` when a file is
+    opened for sourcing (see ``tcsh-sourcetrace.patch``).
+
     This parser is best-effort: it extracts source file tokens and assigns
     synthetic timestamps when explicit timestamps are absent.
     """
     files: dict[str, FileTrace] = {}
     ts_pat = re.compile(r"^\+([0-9]+\.[0-9]+)\s+(.*)$")
+    sourcetrace_pat = re.compile(r"^\+([0-9]+\.[0-9]+)\s+(/[^\s]+)\s+<sourcetrace>\s*$")
     source_pat = re.compile(r"(?:^|\s)(?:source|\.)\s+([^\s\"']+|\"[^\"]*\"|'[^']*')")
     lines = trace_text.splitlines()
     synthetic_start = time.time()
@@ -367,6 +403,24 @@ def parse_tcsh_trace(trace_text: str) -> dict[str, FileTrace]:
     next_ts = synthetic_start
 
     for line in lines:
+        mst = sourcetrace_pat.match(line)
+        if mst:
+            ts = float(mst.group(1))
+            src_path = _expand_trace_path(mst.group(2))
+            if src_path.startswith("."):
+                src_path = os.path.normpath(
+                    os.path.join(os.path.expanduser("~"), src_path)
+                )
+            if src_path not in files:
+                files[src_path] = FileTrace(
+                    path=src_path, first_ts=ts, last_ts=ts, commands=1
+                )
+            else:
+                ft = files[src_path]
+                ft.last_ts = ts
+                ft.commands += 1
+            continue
+
         m = ts_pat.match(line)
         if m:
             ts = float(m.group(1))

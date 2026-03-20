@@ -1,0 +1,15 @@
+--- a/variables.c
++++ b/variables.c
+@@ -581,9 +581,9 @@ initialize_shell_variables (char **env, int privmode)
+   set_if_not ("PS2", secondary_prompt);
+   }
+ 
+   if (current_user.euid == 0)
+-    bind_variable ("PS4", "+ ", 0);
++    bind_variable ("PS4", "+ ${BASH_SOURCE}:${LINENO} ", 0);
+   else
+-    set_if_not ("PS4", "+ ");
++    set_if_not ("PS4", "+ ${BASH_SOURCE}:${LINENO} ");
+ 
+   /* Don't allow IFS to be imported from the environment. */
+   temp_var = bind_variable ("IFS", " \t\n", 0);

@@ -1,0 +1,30 @@
+---
+description: Issue tracker and kanban board; self-hosted, Docker; document in PROJECT.md
+alwaysApply: true
+---
+
+# Issue Tracker & Kanban Board
+
+Implement and use a self-hosted issue tracker with kanban board for project work.
+
+## Board Columns
+
+Maintain issues in these stages:
+
+- **To Do** — Steps that need to be taken
+- **Ready** — Ready to be done
+- **In Progress** — Currently being worked on
+- **Done** — Completed
+
+## Usage
+
+- Update issues with comments documenting **progress** and **decisions**.
+- Prefer **Docker** for running the service.
+- Use self-hosted credentials (API key, web UI credentials) for access.
+- Keep notes in **PROJECT.md** on how to access the tracker (URL, credentials location, quick start).
+
+## Software Selection
+
+- Initially, choose software that fits the above requirements.
+- After **more than 3 issue transitions** using that software, ask: "Is this working for you?"
+- If you agree, update this rule to specify the chosen software (name, features, Docker setup) so it can be reproduced for future projects.

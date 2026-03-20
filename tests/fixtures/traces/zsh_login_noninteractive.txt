@@ -1,4 +1,6 @@
 + somecommand
 source /home/testuser/.zshenv
  . /home/testuser/.zshrc
++1613341234.200000 /home/testuser/.zshlib/all:2 echo in-zshlib
+source /home/testuser/.zshlib/all
 +1613341234.400000 /home/testuser/.zprofile:2 echo done

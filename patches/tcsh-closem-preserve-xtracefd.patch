@@ -1,0 +1,25 @@
+From: Env-Config Project <env-config@local>
+Subject: [PATCH] closem: do not close TCSH_XTRACEFD
+
+tcsh's closem() closes every fd except SHIN/SHOUT/SHDIAG/OLDSTD/FSHTTY.
+That runs early in startup and was closing the fd passed via
+TCSH_XTRACEFD, so xtrace/sourcetrace never reached the parent.
+
+Apply after tcsh-TCSH_XTRACEFD.patch.
+
+---
+ sh.misc.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/sh.misc.c b/sh.misc.c
+index df206c8..1c79d19 100644
+--- a/sh.misc.c
++++ b/sh.misc.c
+@@ -271,6 +271,7 @@ closem(void)
+     for (f = 0; f < num_files; f++)
+ 	if (f != SHIN && f != SHOUT && f != SHDIAG && f != OLDSTD &&
+ 	    f != FSHTTY
++	    && (tcsh_xtracefd < 0 || f != tcsh_xtracefd)
+ #ifdef MALLOC_TRACE
+ 	    && f != 25
+ #endif /* MALLOC_TRACE */
