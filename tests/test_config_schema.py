@@ -1,6 +1,6 @@
 """Tests for config schema coercion and validation helpers."""
 import pytest
-from env_config.config import coerce_value, validate_config, validate_value
+from shellctl.config import coerce_value, validate_config, validate_value
 
 # -- coerce_value -----------------------------------------------------------
 

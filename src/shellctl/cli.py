@@ -144,6 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     reset_p = config_sub.add_parser("reset", help="Reset a config key to default")
     reset_p.add_argument("key", help="Dotted config key to reset")
+    config_sub.add_parser("keys", help="List available config keys and metadata")
     init_global_p = config_sub.add_parser(
         "init-global",
         help="Write full global config template with all keys/defaults",
@@ -318,6 +319,33 @@ def _handle_config_reset(key: str) -> int:
     return 0
 
 
+def _handle_config_keys() -> int:
+    """Print a table of all config keys and schema metadata."""
+    from .config import CONFIG_SCHEMA
+
+    rows = []
+    for key in sorted(CONFIG_SCHEMA):
+        meta = CONFIG_SCHEMA[key]
+        default = repr(meta.default)
+        rows.append(
+            (
+                key,
+                meta.value_type,
+                default,
+                meta.merge_strategy,
+                meta.description,
+            )
+        )
+    print(
+        tabulate.tabulate(
+            rows,
+            headers=("key", "type", "default", "merge", "description"),
+            tablefmt="plain",
+        )
+    )
+    return 0
+
+
 def _handle_config(args: argparse.Namespace) -> int:
     """Dispatch ``config`` sub-subcommands (show/get/set/reset/--tui)."""
     if getattr(args, "tui", False):
@@ -339,6 +367,8 @@ def _handle_config(args: argparse.Namespace) -> int:
         return _handle_config_set(args.key, args.value, getattr(args, "append", False))
     if config_cmd == "reset":
         return _handle_config_reset(args.key)
+    if config_cmd == "keys":
+        return _handle_config_keys()
     if config_cmd == "init-global":
         from .config import global_config_path, write_default_config_template
 
@@ -352,7 +382,7 @@ def _handle_config(args: argparse.Namespace) -> int:
         print(f"wrote global config template: {target}")
         return 0
 
-    print("usage: shellctl config {show,get,set,reset,init-global} ...", file=sys.stderr)
+    print("usage: shellctl config {show,get,set,reset,keys,init-global} ...", file=sys.stderr)
     return 1
 
 

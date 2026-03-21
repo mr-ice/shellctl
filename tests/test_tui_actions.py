@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from env_config.tui import backup_file, disable_file, resolve_path
+from shellctl.tui import backup_file, disable_file, resolve_path
 
 
 def test_backup_file_creates_timestamped_copy(tmp_path, monkeypatch):

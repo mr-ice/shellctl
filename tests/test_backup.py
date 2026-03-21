@@ -6,7 +6,7 @@ import os
 import tarfile
 
 import pytest
-from env_config.backup import (
+from shellctl.backup import (
     BackupManifest,
     create_archive,
     create_backup,
@@ -396,7 +396,7 @@ def _cli_env(tmp_path, monkeypatch):
     # Patch discover to return our fake files
     files = _create_startup_files(home, [".bashrc", ".bash_profile", ".profile"])
     monkeypatch.setattr(
-        "env_config.cli._discover_files",
+        "shellctl.cli._discover_files",
         lambda *a, **kw: files,
     )
     return home, backup_dir, files
@@ -406,11 +406,11 @@ class TestCLIBackup:
     """CLI integration tests for backup subcommand."""
 
     def test_backup_creates_archive(self, _cli_env, monkeypatch):
-        from env_config.cli import main
+        from shellctl.cli import main
 
         # Patch discover import inside the handler
         home, backup_dir, files = _cli_env
-        monkeypatch.setattr("env_config.backup.Path.home", lambda: home)
+        monkeypatch.setattr("shellctl.backup.Path.home", lambda: home)
 
         rc = main(["backup", "--family", "bash"])
         assert rc == 0
@@ -418,10 +418,10 @@ class TestCLIBackup:
         assert len(archives) == 1
 
     def test_backup_with_include(self, _cli_env, monkeypatch):
-        from env_config.cli import main
+        from shellctl.cli import main
 
         home, backup_dir, files = _cli_env
-        monkeypatch.setattr("env_config.backup.Path.home", lambda: home)
+        monkeypatch.setattr("shellctl.backup.Path.home", lambda: home)
 
         rc = main(["backup", "--family", "bash", "--include", ".*bashrc*"])
         assert rc == 0
@@ -435,10 +435,10 @@ class TestCLIArchive:
     """CLI integration tests for archive subcommand."""
 
     def test_archive_removes_files(self, _cli_env, monkeypatch):
-        from env_config.cli import main
+        from shellctl.cli import main
 
         home, backup_dir, files = _cli_env
-        monkeypatch.setattr("env_config.backup.Path.home", lambda: home)
+        monkeypatch.setattr("shellctl.backup.Path.home", lambda: home)
 
         rc = main(["archive", "--family", "bash", "--yes"])
         assert rc == 0
@@ -452,10 +452,10 @@ class TestCLIRestore:
     """CLI integration tests for restore subcommand."""
 
     def test_restore_most_recent(self, _cli_env, monkeypatch):
-        from env_config.cli import main
+        from shellctl.cli import main
 
         home, backup_dir, files = _cli_env
-        monkeypatch.setattr("env_config.backup.Path.home", lambda: home)
+        monkeypatch.setattr("shellctl.backup.Path.home", lambda: home)
 
         # Create backup first
         main(["backup", "--family", "bash"])
@@ -468,10 +468,10 @@ class TestCLIRestore:
         assert (home / ".bashrc").exists()
 
     def test_restore_ambiguous_substring(self, _cli_env, monkeypatch, capsys):
-        from env_config.cli import main
+        from shellctl.cli import main
 
         home, backup_dir, files = _cli_env
-        monkeypatch.setattr("env_config.backup.Path.home", lambda: home)
+        monkeypatch.setattr("shellctl.backup.Path.home", lambda: home)
 
         # Create two backups
         main(["backup", "--family", "bash"])
@@ -479,7 +479,7 @@ class TestCLIRestore:
         # Ensure we refresh the file list for the second backup
         new_files = [str(home / n) for n in [".bashrc", ".bash_profile", ".profile"]]
         monkeypatch.setattr(
-            "env_config.cli._discover_files",
+            "shellctl.cli._discover_files",
             lambda *a, **kw: new_files,
         )
         main(["backup", "--family", "bash"])
@@ -495,10 +495,10 @@ class TestCLIListBackups:
     """CLI integration tests for list-backups subcommand."""
 
     def test_list_backups(self, _cli_env, monkeypatch, capsys):
-        from env_config.cli import main
+        from shellctl.cli import main
 
         home, backup_dir, files = _cli_env
-        monkeypatch.setattr("env_config.backup.Path.home", lambda: home)
+        monkeypatch.setattr("shellctl.backup.Path.home", lambda: home)
 
         main(["backup", "--family", "bash"])
         rc = main(["list-backups"])
@@ -508,7 +508,7 @@ class TestCLIListBackups:
         assert "files" in out.lower()
 
     def test_list_backups_empty(self, tmp_path, monkeypatch, capsys):
-        from env_config.cli import main
+        from shellctl.cli import main
 
         monkeypatch.setenv("SHELLCTL_BACKUP_DIR", str(tmp_path / "empty"))
         rc = main(["list-backups"])

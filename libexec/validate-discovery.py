@@ -12,10 +12,12 @@ Usage (recommended — uses project venv and current sources):
   cd /path/to/shellctl
   uv run python libexec/validate-discovery.py
 
-Plain python3 (must see in-tree ``src/env_config``):
+Plain python3 (must see in-tree ``src/shellctl``):
 
   cd /path/to/shellctl
   PYTHONPATH=src python3 libexec/validate-discovery.py
+  or
+  PYTHONPATH=src python3 -m shellctl.libexec.validate-discovery
 
 If you only run ``python3`` without ``uv`` and without ``PYTHONPATH=src``,
 Python may import an older globally installed ``shellctl`` and zsh
@@ -38,8 +40,8 @@ _src = PROJECT_ROOT / "src"
 if _src.is_dir():
     sys.path.insert(0, str(_src))
 
-from env_config.discover import discover_startup_files_modes  # noqa: E402
-from env_config.modes import INVOCATION_MODES  # noqa: E402
+from shellctl.discover import discover_startup_files_modes  # noqa: E402
+from shellctl.modes import INVOCATION_MODES  # noqa: E402
 
 
 def main() -> int:

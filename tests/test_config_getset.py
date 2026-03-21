@@ -1,7 +1,7 @@
 """Tests for config get/set/reset/show operations and nested-dict helpers."""
 import pytest
 import tomli_w
-from env_config.config import (
+from shellctl.config import (
     _MISSING,
     CONFIG_SCHEMA,
     config_get,
@@ -79,8 +79,8 @@ def _isolate_config(tmp_path, monkeypatch):
     """Point config paths to tmp_path so tests don't touch real files."""
     user_cfg = tmp_path / ".shellctl.toml"
     global_cfg = tmp_path / "global.toml"
-    monkeypatch.setattr("env_config.config.user_config_path", lambda: user_cfg)
-    monkeypatch.setattr("env_config.config.GLOBAL_CONFIG_PATH", global_cfg)
+    monkeypatch.setattr("shellctl.config.user_config_path", lambda: user_cfg)
+    monkeypatch.setattr("shellctl.config.GLOBAL_CONFIG_PATH", global_cfg)
     return user_cfg, global_cfg
 
 

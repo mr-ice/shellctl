@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-shellctl = "env_config.cli:_entry"
+shellctl = "shellctl.cli:_entry"
 
 [tool.ruff]
 line-length = 100

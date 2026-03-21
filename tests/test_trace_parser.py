@@ -2,7 +2,7 @@
 
 These tests ensure it can handle various trace formats and extract relevant information.
 """
-from env_config.trace import parse_trace
+from shellctl.trace import parse_trace
 
 
 def test_parse_bash_trace_simple():

@@ -1,11 +1,9 @@
-from pathlib import Path
-
-from env_config.config import _load_cfg_safe, default_config_dict
+from shellctl.config import _load_cfg_safe, default_config_dict
 
 
-def test_load_config_safe():
-    """This calls load_config so should cover that as well."""
-    p = Path("config/shellctl.global.defaults.toml")
+def test_load_config_safe(tmp_path):
+    """Malformed TOML is treated as empty by _load_cfg_safe."""
+    p = tmp_path / "bad.toml"
     p.write_text("-")
     assert _load_cfg_safe(p) == {}
 

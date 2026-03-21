@@ -42,8 +42,7 @@ def resolve_path(name: str) -> str:
 def backup_file(path: str) -> bool:
     """Create a timestamped backup of `path` into the backup directory.
 
-    Backup directory is taken from `SHELLCTL_BACKUP_DIR` (or legacy
-    `ENVCONFIG_BACKUP_DIR`) and defaults to `~/.cache/shellctl/backups`.
+    Backup directory is taken from `SHELLCTL_BACKUP_DIR` and defaults to `~/.cache/shellctl/backups`.
     """
     try:
         p = Path(path)
@@ -51,7 +50,6 @@ def backup_file(path: str) -> bool:
             return False
         backup_dir = Path(
             os.environ.get("SHELLCTL_BACKUP_DIR")
-            or os.environ.get("ENVCONFIG_BACKUP_DIR")
             or Path.home() / ".cache" / "shellctl" / "backups"
         )
         backup_dir.mkdir(parents=True, exist_ok=True)

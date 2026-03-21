@@ -54,7 +54,6 @@ def get_backup_dir() -> Path:
 
     Uses the ``SHELLCTL_BACKUP_DIR`` environment variable when set,
     otherwise defaults to ``~/.cache/shellctl/backups``.
-    ``ENVCONFIG_BACKUP_DIR`` is accepted for backward compatibility.
 
     Returns
     -------
@@ -63,7 +62,6 @@ def get_backup_dir() -> Path:
     """
     backup_dir = Path(
         os.environ.get("SHELLCTL_BACKUP_DIR")
-        or os.environ.get("ENVCONFIG_BACKUP_DIR")
         or Path.home() / ".cache" / "shellctl" / "backups"
     )
     backup_dir.mkdir(parents=True, exist_ok=True)

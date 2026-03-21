@@ -7,7 +7,7 @@ These tests simulate parsed shell trace records and assert
 import os
 from types import SimpleNamespace
 
-from env_config.discover import _run_tracer
+from shellctl.discover import _run_tracer
 
 
 def test_run_tracer_collect_output_parsing(monkeypatch, tmp_path):
@@ -16,7 +16,7 @@ def test_run_tracer_collect_output_parsing(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     home = str(tmp_path)
     monkeypatch.setattr(
-        "env_config.trace.collect_startup_file_traces",
+        "shellctl.trace.collect_startup_file_traces",
         lambda *a, **k: [
             SimpleNamespace(path=os.path.join(home, ".bashrc")),
             SimpleNamespace(path=os.path.join(home, ".bash_profile")),

@@ -363,14 +363,14 @@ def user_config_path() -> Path:
 def global_config_path() -> Path:
     """Return the global/site config path.
 
-    Environment override:
-    - ``SHELLCTL_GLOBAL_CONFIG_PATH`` to point at a non-/etc location.
-    - ``ENVCONFIG_GLOBAL_CONFIG_PATH`` is accepted for backward compatibility.
+    Default file is ``/etc/shellctl.toml`` (see ``GLOBAL_CONFIG_PATH``).
+
+    Environment override (for installs and tests):
+    - ``SHELLCTL_GLOBAL_CONFIG_PATH`` — use another file instead of ``/etc``.
     """
     return Path(
         str(
             os.environ.get("SHELLCTL_GLOBAL_CONFIG_PATH")
-            or os.environ.get("ENVCONFIG_GLOBAL_CONFIG_PATH")
             or GLOBAL_CONFIG_PATH
         )
     )

@@ -1,7 +1,13 @@
 """Tests for compose file selection and installation."""
 from __future__ import annotations
 
-from env_config.compose import (
+import subprocess
+from pathlib import Path
+
+import pytest
+import tomli_w
+
+from shellctl.compose import (
     ComposeFile,
     _extract_summary,
     _registry_path,
@@ -10,6 +16,10 @@ from env_config.compose import (
     install_compose_files,
     list_compose_files,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+COMPOSE_TEAM_A_ENV = REPO_ROOT / "repos/compose/teamA/env"
+COMPOSE_TEAM_B_ENV = REPO_ROOT / "repos/compose/teamB/env"
 
 
 class TestExtractSummary:
@@ -129,6 +139,159 @@ class TestListComposeFiles:
         )
         # First occurrence wins
         assert len([f for f in files if f.name == "foo"]) == 1
+
+    def test_non_git_directory_skipped_when_strict(self, tmp_path):
+        d = tmp_path / "nogit"
+        d.mkdir()
+        (d / "zshrc-plain").write_text("# ok\n")
+        assert (
+            list_compose_files(
+                "zsh",
+                paths=[str(d)],
+                shell_rc_files=["zshrc"],
+                allow_non_repo=False,
+            )
+            == []
+        )
+        found = list_compose_files(
+            "zsh",
+            paths=[str(d)],
+            shell_rc_files=["zshrc"],
+            allow_non_repo=True,
+        )
+        assert len(found) == 1 and found[0].name == "plain"
+
+    def test_dirty_repo_skipped_without_allow_dirty(self, tmp_path):
+        repo = tmp_path / "r"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@t"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "t"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        (repo / "zshrc-x").write_text("# x\n")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "m"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        (repo / "zshrc-x").write_text("# dirty\n")
+        files = list_compose_files(
+            "zsh",
+            paths=[str(repo)],
+            shell_rc_files=["zshrc"],
+            allow_non_repo=False,
+        )
+        assert files == []
+
+    def test_dirty_repo_allowed_with_allow_dirty_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SHELLCTL_COMPOSE_ALLOW_DIRTY", "1")
+        repo = tmp_path / "r"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@t"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "t"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        (repo / "zshrc-x").write_text("# x\n")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "m"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        (repo / "zshrc-x").write_text("# dirty\n")
+        files = list_compose_files(
+            "zsh",
+            paths=[str(repo)],
+            shell_rc_files=["zshrc"],
+            allow_non_repo=False,
+        )
+        assert len(files) == 1 and files[0].name == "x"
+
+
+class TestComposeFixtureRepos:
+    """Integration checks against repos/compose/* sample trees."""
+
+    def test_team_a_tcsh_files_clean_main(self):
+        if not COMPOSE_TEAM_A_ENV.is_dir():
+            pytest.skip("repos/compose/teamA/env not present")
+        files = list_compose_files(
+            "tcsh",
+            paths=[str(COMPOSE_TEAM_A_ENV.resolve())],
+            shell_rc_files=["tcshrc"],
+            allow_non_repo=False,
+        )
+        names = {f.name for f in files}
+        assert names >= {"teamshell", "teammore"}
+
+    def test_team_b_bash_files_clean_main(self):
+        if not COMPOSE_TEAM_B_ENV.is_dir():
+            pytest.skip("repos/compose/teamB/env not present")
+        files = list_compose_files(
+            "bash",
+            paths=[str(COMPOSE_TEAM_B_ENV.resolve())],
+            shell_rc_files=["bashrc", "bash_profile"],
+            allow_non_repo=False,
+        )
+        names = {f.name for f in files}
+        assert names >= {"bono"}
+
+    def test_both_paths_together_dedupes_by_rc_and_tag(self):
+        if not COMPOSE_TEAM_A_ENV.is_dir() or not COMPOSE_TEAM_B_ENV.is_dir():
+            pytest.skip("repos/compose fixtures not present")
+        files = list_compose_files(
+            "bash",
+            paths=[
+                str(COMPOSE_TEAM_A_ENV.resolve()),
+                str(COMPOSE_TEAM_B_ENV.resolve()),
+            ],
+            shell_rc_files=["bashrc"],
+            allow_non_repo=True,
+        )
+        # team A has no bashrc-*; team B has bashrc-bono
+        assert [f.name for f in files if f.rc_base == "bashrc"] == ["bono"]
+
+    def test_global_config_paths_via_env_site_toml(self, monkeypatch, tmp_path):
+        if not COMPOSE_TEAM_A_ENV.is_dir():
+            pytest.skip("repos/compose/teamA/env not present")
+        user_cfg = tmp_path / ".shellctl.toml"
+        user_cfg.write_text("", encoding="utf8")
+        monkeypatch.setattr("shellctl.config.user_config_path", lambda: user_cfg)
+        site = tmp_path / "site.toml"
+        site.write_text(
+            tomli_w.dumps(
+                {"compose": {"paths": [str(COMPOSE_TEAM_A_ENV.resolve())]}}
+            ),
+            encoding="utf8",
+        )
+        monkeypatch.setenv("SHELLCTL_GLOBAL_CONFIG_PATH", str(site))
+        files = list_compose_files(
+            "tcsh",
+            shell_rc_files=["tcshrc"],
+            allow_non_repo=False,
+        )
+        names = {f.name for f in files}
+        assert names >= {"teamshell", "teammore"}
 
 
 class TestInstallComposeFiles:

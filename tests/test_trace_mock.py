@@ -1,7 +1,7 @@
 """Tests for the trace mocking functionality."""
 import os
 
-from env_config.trace import analyze_traces, parse_trace, run_shell_trace
+from shellctl.trace import analyze_traces, parse_trace, run_shell_trace
 
 
 def test_run_shell_trace_uses_mock(monkeypatch, tmp_path):

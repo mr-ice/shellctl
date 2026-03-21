@@ -2,7 +2,7 @@
 import tomllib
 
 import pytest
-from env_config.cli import main
+from shellctl.cli import main
 
 
 @pytest.fixture()
@@ -10,8 +10,8 @@ def _isolate(tmp_path, monkeypatch):
     """Redirect config paths to tmp_path so tests are hermetic."""
     user_cfg = tmp_path / ".shellctl.toml"
     global_cfg = tmp_path / "global.toml"
-    monkeypatch.setattr("env_config.config.user_config_path", lambda: user_cfg)
-    monkeypatch.setattr("env_config.config.GLOBAL_CONFIG_PATH", global_cfg)
+    monkeypatch.setattr("shellctl.config.user_config_path", lambda: user_cfg)
+    monkeypatch.setattr("shellctl.config.GLOBAL_CONFIG_PATH", global_cfg)
     return user_cfg, global_cfg
 
 
@@ -185,3 +185,15 @@ class TestConfigInitGlobal:
         rc = main(["config", "init-global", "--path", str(out_path)])
         assert rc == 1
         assert "already exists" in capsys.readouterr().err
+
+
+class TestConfigKeys:
+    """Tests for ``shellctl config keys``."""
+
+    def test_keys_prints_metadata_table(self, _isolate, capsys):
+        rc = main(["config", "keys"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "trace.threshold_secs" in out
+        assert "float_or_null" in out
+        assert "Flag files taking longer than N seconds" in out

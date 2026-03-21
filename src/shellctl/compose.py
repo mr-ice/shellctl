@@ -13,6 +13,12 @@ install_compose_files(selections, home_dir)
     Copy selected files to home directory and update registry.
 get_registry()
     Load the compose selections registry.
+
+Environment (testing)
+---------------------
+``SHELLCTL_COMPOSE_ALLOW_DIRTY``
+    If truthy, accept git repos on ``main``/``master`` even when the working
+    tree is dirty. Strict cleanliness is still enforced when unset.
 """
 
 from __future__ import annotations
@@ -41,7 +47,6 @@ def _registry_path() -> Path:
     """Return the path to the compose registry file."""
     cache = Path(
         os.environ.get("SHELLCTL_CACHE_DIR")
-        or os.environ.get("ENVCONFIG_CACHE_DIR")
         or Path.home() / ".cache" / "shellctl"
     )
     cache.mkdir(parents=True, exist_ok=True)
@@ -107,6 +112,16 @@ def _extract_summary(path: Path) -> str:
     return ""
 
 
+def _compose_allow_dirty_from_env() -> bool:
+    """True when ``SHELLCTL_COMPOSE_ALLOW_DIRTY`` is set (testing / local use).
+
+    When set, compose still requires a git worktree on ``main``/``master`` but
+    allows a non-clean working tree (porcelain output).
+    """
+    v = os.environ.get("SHELLCTL_COMPOSE_ALLOW_DIRTY", "")
+    return str(v).lower() in ("1", "true", "yes", "on")
+
+
 def _is_repo_on_main(path: Path) -> bool:
     """Check if *path* is in a git repo on main branch at HEAD.
 
@@ -121,6 +136,7 @@ def _is_repo_on_main(path: Path) -> bool:
         True if the directory is a git repo and is on main at HEAD.
     """
     dir_path = path if path.is_dir() else path.parent
+    allow_dirty = _compose_allow_dirty_from_env()
     try:
         result = subprocess.run(
             ["git", "-C", str(dir_path), "rev-parse", "--is-inside-work-tree"],
@@ -145,6 +161,9 @@ def _is_repo_on_main(path: Path) -> bool:
         current = branch.stdout.strip()
         if current not in ("main", "master"):
             return False
+
+        if allow_dirty:
+            return True
 
         # Check for uncommitted changes or unpushed commits
         status = subprocess.run(

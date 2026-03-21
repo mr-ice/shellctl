@@ -7,7 +7,7 @@ without invoking real shells.
 
 import os
 
-from env_config.discover import discover_startup_files_modes
+from shellctl.discover import discover_startup_files_modes
 
 
 def test_discover_uses_shell_trace_mock(monkeypatch):

@@ -57,21 +57,21 @@ Levels: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: WARNING).
 ## CLI highlights
 
 - `detect` — detect current and intended shell and family. See
-  [src/env_config/detect_shell.py](src/env_config/detect_shell.py)
+  [src/shellctl/detect_shell.py](src/shellctl/detect_shell.py)
 - `discover` — discover candidate startup files (per-mode or union). Flags:
   `--family`, `--shell-path`, `--use-shell-trace`, `--refresh-cache`,
-  `--modes`, `--mode` (li/ln/ni/nn or full names, repeatable). See [src/env_config/discover.py](src/env_config/discover.py).
+  `--modes`, `--mode` (li/ln/ni/nn or full names, repeatable). See [src/shellctl/discover.py](src/shellctl/discover.py).
 - `trace` — run a shell-level trace and summarize per-file timing. Flags:
   `--family`, `--shell-path`, `--mode` (li/ln/ni/nn), `--dry-run`, `--output-file`,
   `--threshold-secs`, `--threshold-percent`, `--tui`. Core tracing/parsing is in
-  [src/env_config/trace.py](src/env_config/trace.py).
+  [src/shellctl/trace.py](src/shellctl/trace.py).
 - `backup` — back up discovered startup files to a tar.gz archive. Flags:
   `--family`, `--include`, `--exclude`, `--tui`.
 - `archive` — back up startup files and remove originals. Flags:
   `--family`, `--include`, `--exclude`, `--yes`, `--tui`.
 - `restore` — restore files from a backup archive. Flags:
   `--archive`, `--include`, `--exclude`, `--force`, `--yes`, `--tui`.
-- `list-backups` — list available backup archives with timestamps and
+- `list-backups` — list available backup archives with timestamps and 
   file contents.
 - `compose` — pick and install optional shell init files from compose paths.
   Subcommands: `list`, `pick` (with `--tui` for interactive selection).
@@ -92,14 +92,14 @@ discovery/trace code paths using these fixtures set `SHELLCTL_MOCK_TRACE_DIR`.
 
 ## Development notes
 
-- Parsers: `src/env_config/trace.py` contains parsers for bash, zsh, tcsh and
+- Parsers: `src/shellctl/trace.py` contains parsers for bash, zsh, tcsh and
   a generic fallback. Improve path normalization and timestamp extraction
   there when adding new fixtures.
-- Discovery: `src/env_config/discover.py` prefers system tracers where
+- Discovery: `src/shellctl/discover.py` prefers system tracers where
   available but falls back to the safer shell-level tracer which honors the
   mock fixtures. The cache directory defaults to `~/.cache/shellctl` but
   can be overridden with `SHELLCTL_CACHE_DIR`.
-- TUI: a simple curses UI lives in `src/env_config/tui.py`.
+- TUI: a simple curses UI lives in `src/shellctl/tui.py`.
 
 # shellctl
 
@@ -279,19 +279,19 @@ Basic CLI examples
 
 ```bash
 # detect
-PYTHONPATH=src python -m env_config.cli detect
+PYTHONPATH=src python -m shellctl.cli detect
 
 # discover (per-mode)
-PYTHONPATH=src python -m env_config.cli discover --family bash --modes
+PYTHONPATH=src python -m shellctl.cli discover --family bash --modes
 
 # run a trace and print a summary
-PYTHONPATH=src python -m env_config.cli trace --family bash --mode login_noninteractive --threshold-secs 0.05
+PYTHONPATH=src python -m shellctl.cli trace --family bash --mode login_noninteractive --threshold-secs 0.05
 
 # run trace and open curses TUI
-PYTHONPATH=src python -m env_config.cli trace --family bash --mode login_noninteractive --threshold-secs 0.05 --tui
+PYTHONPATH=src python -m shellctl.cli trace --family bash --mode login_noninteractive --threshold-secs 0.05 --tui
 
 # dry-run to view command
-PYTHONPATH=src python -m env_config.cli trace --family zsh --mode login_noninteractive --dry-run
+PYTHONPATH=src python -m shellctl.cli trace --family zsh --mode login_noninteractive --dry-run
 ```
 
 Next features to implement

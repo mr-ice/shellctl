@@ -1,1 +1,28 @@
--
+# shellctl global defaults template
+# Copy to /etc/shellctl.toml (or SHELLCTL_GLOBAL_CONFIG_PATH) and edit.
+
+[compose]
+# Allow compose paths that are not git repos on main:HEAD
+allow_non_repo = "false"
+
+# Directories containing compose shell init files
+paths = []
+
+# RC file variants (e.g. zshrc, zshenv, zprofile)
+shell_rc_files = []
+
+
+[repo]
+# Local path to clone repo into
+# destination = null
+
+# Git repo URL for shell init files
+# url = null
+
+
+[trace]
+# Flag files taking longer than N% of total
+# threshold_percent = null
+
+# Flag files taking longer than N seconds
+# threshold_secs = null
