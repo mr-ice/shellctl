@@ -50,15 +50,14 @@ class TestValidateEditorConfig:
     def test_wrong_value_type(self, tmp_path):
         """Correct keys with wrong value types produce errors."""
         p = tmp_path / "cfg.toml"
-        p.write_text(tomli_w.dumps({"tui": {"page_size": "not_an_int"}}))
+        p.write_text(tomli_w.dumps({"trace": {"threshold_secs": "not_a_float"}}))
         errors = validate_editor_config(p)
-        assert any("expected int" in e for e in errors)
+        assert any("expected float_or_null" in e for e in errors)
 
     def test_full_valid_config(self, tmp_path):
         """A fully populated valid config passes."""
         data = {
             "trace": {"threshold_secs": 0.1, "threshold_percent": 25.0},
-            "tui": {"page_size": 30},
             "repo": {"url": "https://example.com/repo.git", "destination": "/tmp/repo"},
             "compose": {
                 "paths": ["/a", "/b"],
@@ -84,7 +83,7 @@ class TestEditorRestore:
         monkeypatch.setattr("env_config.config.GLOBAL_CONFIG_PATH", global_cfg)
 
         # write a valid initial config
-        save_config(user_cfg, {"tui": {"page_size": 42}})
+        save_config(user_cfg, {"trace": {"threshold_percent": 42.0}})
         original = user_cfg.read_text()
 
         # simulate the editor writing invalid TOML
@@ -102,7 +101,7 @@ class TestEditorRestore:
 
         # file should be restored
         with open(user_cfg, "rb") as f:
-            assert tomllib.load(f) == {"tui": {"page_size": 42}}
+            assert tomllib.load(f) == {"trace": {"threshold_percent": 42.0}}
 
     def test_valid_edit_is_kept(self, tmp_path, monkeypatch):
         """After 'editing' produces valid TOML, the new content is kept."""
@@ -113,11 +112,11 @@ class TestEditorRestore:
         monkeypatch.setattr("env_config.config.user_config_path", lambda: user_cfg)
         monkeypatch.setattr("env_config.config.GLOBAL_CONFIG_PATH", global_cfg)
 
-        save_config(user_cfg, {"tui": {"page_size": 10}})
+        save_config(user_cfg, {"trace": {"threshold_percent": 10.0}})
         original = user_cfg.read_text()
 
         # simulate the editor writing a valid change
-        new_data = {"tui": {"page_size": 99}}
+        new_data = {"trace": {"threshold_percent": 99.0}}
         user_cfg.write_text(tomli_w.dumps(new_data))
 
         errors = validate_editor_config(user_cfg)

@@ -1,7 +1,6 @@
 """Tests for the shared modes module."""
 from env_config.modes import (
     INVOCATION_MODES,
-    SHORT_TAGS,
     mode_to_args,
     resolve_modes,
 )

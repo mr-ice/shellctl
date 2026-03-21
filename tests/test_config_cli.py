@@ -26,7 +26,7 @@ class TestConfigShow:
         assert rc == 0
         out = capsys.readouterr().out
         assert "trace.threshold_secs" in out
-        assert "tui.page_size" in out
+        assert "trace.threshold_percent" in out
         assert "repo.url" in out
         assert "compose.paths" in out
 
@@ -49,9 +49,9 @@ class TestConfigGet:
     """Tests for ``env-config config get``."""
 
     def test_get_known_key(self, _isolate, capsys):
-        rc = main(["config", "get", "tui.page_size"])
+        rc = main(["config", "get", "trace.threshold_percent"])
         assert rc == 0
-        assert "20" in capsys.readouterr().out
+        assert "None" in capsys.readouterr().out
 
     def test_get_unknown_key(self, _isolate, capsys):
         rc = main(["config", "get", "no.such.key"])
@@ -59,8 +59,8 @@ class TestConfigGet:
         assert "unknown config key" in capsys.readouterr().err
 
     def test_get_reflects_set(self, _isolate, capsys):
-        main(["config", "set", "tui.page_size", "50"])
-        rc = main(["config", "get", "tui.page_size"])
+        main(["config", "set", "trace.threshold_percent", "50"])
+        rc = main(["config", "get", "trace.threshold_percent"])
         assert rc == 0
         assert "50" in capsys.readouterr().out
 
@@ -71,16 +71,16 @@ class TestConfigGet:
 class TestConfigSet:
     """Tests for ``env-config config set``."""
 
-    def test_set_valid_int(self, _isolate, capsys):
-        rc = main(["config", "set", "tui.page_size", "30"])
+    def test_set_valid_float(self, _isolate, capsys):
+        rc = main(["config", "set", "trace.threshold_percent", "30"])
         assert rc == 0
         user_cfg, _ = _isolate
         with open(user_cfg, "rb") as f:
             data = tomllib.load(f)
-        assert data["tui"]["page_size"] == 30
+        assert data["trace"]["threshold_percent"] == pytest.approx(30.0)
 
     def test_set_invalid_type(self, _isolate, capsys):
-        rc = main(["config", "set", "tui.page_size", "abc"])
+        rc = main(["config", "set", "trace.threshold_percent", "abc"])
         assert rc == 1
         assert "error" in capsys.readouterr().err.lower()
 
@@ -140,12 +140,12 @@ class TestConfigReset:
     """Tests for ``env-config config reset``."""
 
     def test_reset_reverts_to_default(self, _isolate, capsys):
-        main(["config", "set", "tui.page_size", "99"])
-        rc = main(["config", "reset", "tui.page_size"])
+        main(["config", "set", "trace.threshold_percent", "99"])
+        rc = main(["config", "reset", "trace.threshold_percent"])
         assert rc == 0
         # get should now show default
-        main(["config", "get", "tui.page_size"])
-        assert "20" in capsys.readouterr().out
+        main(["config", "get", "trace.threshold_percent"])
+        assert "None" in capsys.readouterr().out
 
     def test_reset_unknown_key(self, _isolate, capsys):
         rc = main(["config", "reset", "bogus.key"])
@@ -163,3 +163,43 @@ class TestConfigNoSubcmd:
         rc = main(["config"])
         assert rc == 1
         assert "usage" in capsys.readouterr().err.lower()
+
+
+class TestConfigInitGlobal:
+    """Tests for ``env-config config init-global``."""
+
+    def test_writes_template(self, _isolate, tmp_path, capsys):
+        out_path = tmp_path / "site.toml"
+        rc = main(["config", "init-global", "--path", str(out_path)])
+        assert rc == 0
+        assert out_path.exists()
+        text = out_path.read_text(encoding="utf8")
+        assert "[trace]" in text
+        assert "threshold_secs" in text
+        # nested key name should be leaf in section
+        assert "compose.paths" not in text
+
+    def test_requires_force_to_overwrite(self, _isolate, tmp_path, capsys):
+        out_path = tmp_path / "site.toml"
+        out_path.write_text("[trace]\n", encoding="utf8")
+        rc = main(["config", "init-global", "--path", str(out_path)])
+        assert rc == 1
+        assert "already exists" in capsys.readouterr().err
+
+
+class TestSettingsShortcut:
+    """Tests for ``env-config settings`` shortcut command."""
+
+    def test_settings_assignment_syntax(self, _isolate, capsys):
+        rc = main(["settings", "trace.threshold_percent", "=", "55"])
+        assert rc == 0
+        rc = main(["config", "get", "trace.threshold_percent"])
+        assert rc == 0
+        assert "55" in capsys.readouterr().out
+
+    def test_settings_key_equals_value_syntax(self, _isolate, capsys):
+        rc = main(["settings", "trace.threshold_secs=0.2"])
+        assert rc == 0
+        rc = main(["config", "get", "trace.threshold_secs"])
+        assert rc == 0
+        assert "0.2" in capsys.readouterr().out

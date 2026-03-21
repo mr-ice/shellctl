@@ -137,6 +137,9 @@ class TestValidateValue:
         assert validate_value([1, 2], "list_of_strings") is False
         assert validate_value("not a list", "list_of_strings") is False
 
+    def test_rejects_unknown(self):
+        assert validate_value(("a",), "set") is False
+
 
 # -- validate_config --------------------------------------------------------
 
@@ -159,9 +162,9 @@ class TestValidateConfig:
         assert any("unknown key 'trace.extra_key'" in e for e in errors)
 
     def test_wrong_type(self):
-        data = {"tui": {"page_size": "not_an_int"}}
+        data = {"trace": {"threshold_secs": "not_a_float"}}
         errors = validate_config(data)
-        assert any("expected int" in e for e in errors)
+        assert any("expected float_or_null" in e for e in errors)
 
     def test_empty_config_is_valid(self):
         assert validate_config({}) == []

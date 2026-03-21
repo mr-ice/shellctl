@@ -55,3 +55,31 @@ def test_detect_uses_parent_when_no_env(monkeypatch):
     res = detect_current_and_intended_shell()
     assert res["intended_family"] == "zsh"
     assert res["resolved_source"] == "parent"
+
+
+def test_detect_uses_login_shell(monkeypatch):
+    """Test that detect_current_and_intended_shell uses loginshell SHELL env is not set.
+
+    To fall all the way through we have to set the return of subprocess.check_output to
+    anything not matching a known shell.
+    """
+    monkeypatch.delenv("SHELL", raising=False)
+
+    monkeypatch.setattr(subprocess, "check_output", "not-a-shell\n")
+    monkeypatch.setattr(pwd, "getpwuid", lambda uid: SimpleNamespace(pw_shell="/bin/bash"))
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/zsh" if name == "zsh" else None)
+
+    res = detect_current_and_intended_shell()
+    assert res["intended_family"] == "bash"
+    assert res["resolved_source"] == "login"
+
+
+def test_detect_shell_skips_invalid_args(monkeypatch):
+    """Test that detect_current_and_intended_shell returns None on invalid arguments."""
+    monkeypatch.setattr(pwd, "getpwuid", lambda uid: SimpleNamespace(pw_shell="/bin/bash"))
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/zsh" if name == "zsh" else None)
+
+    res = detect_current_and_intended_shell("not-a-shell")
+    #
+    assert res["intended_family"] == "bash"
+    assert res["resolved_source"] == "cli"  # this falls through from the original test

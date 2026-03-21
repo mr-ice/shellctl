@@ -24,6 +24,7 @@ validate_config(data)
 """
 from __future__ import annotations
 
+import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -79,12 +80,6 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = {
         value_type="float_or_null",
         default=None,
         description="Flag files taking longer than N% of total",
-    ),
-    "tui.page_size": ConfigKey(
-        key="tui.page_size",
-        value_type="int",
-        default=20,
-        description="Items per page in TUI",
     ),
     "repo.url": ConfigKey(
         key="repo.url",
@@ -365,6 +360,15 @@ def user_config_path() -> Path:
     return Path.home() / ".env-config.toml"
 
 
+def global_config_path() -> Path:
+    """Return the global/site config path.
+
+    Environment override:
+    - ``ENVCONFIG_GLOBAL_CONFIG_PATH`` to point at a non-/etc location.
+    """
+    return Path(str(os.environ.get("ENVCONFIG_GLOBAL_CONFIG_PATH") or GLOBAL_CONFIG_PATH))
+
+
 def _strip_none(data: dict) -> dict:
     """Remove keys whose value is ``None`` (TOML has no null literal).
 
@@ -472,7 +476,7 @@ def load_merged_config() -> dict[str, Any]:
     values.  List keys with ``merge_strategy="append"`` concatenate
     global and user lists rather than replacing.
     """
-    global_cfg = _load_cfg_safe(GLOBAL_CONFIG_PATH)
+    global_cfg = _load_cfg_safe(global_config_path())
     user_cfg = _load_cfg_safe(user_config_path())
 
     result: dict[str, Any] = {}
@@ -480,6 +484,58 @@ def load_merged_config() -> dict[str, Any]:
     _layer_config(result, global_cfg)
     _layer_config(result, user_cfg, global_cfg=global_cfg)
     return result
+
+
+def default_config_dict() -> dict[str, Any]:
+    """Return nested config dict containing schema defaults."""
+    out: dict[str, Any] = {}
+    _apply_schema_defaults(out)
+    return out
+
+
+def render_default_config_template() -> str:
+    """Render a complete site-wide config template containing all keys.
+
+    ``None`` defaults are emitted as commented ``# key = null`` lines because
+    TOML has no native null literal.
+    """
+    sections: dict[str, list[tuple[str, ConfigKey]]] = {}
+    for dotted, meta in CONFIG_SCHEMA.items():
+        section, key = dotted.split(".", 1)
+        sections.setdefault(section, []).append((key, meta))
+
+    lines: list[str] = [
+        "# env-config global defaults template",
+        "# Copy to /etc/env-config.toml (or ENVCONFIG_GLOBAL_CONFIG_PATH) and edit.",
+        "",
+    ]
+    for section in sorted(sections):
+        lines.append(f"[{section}]")
+        for key, meta in sorted(sections[section], key=lambda x: x[0]):
+            lines.append(f"# {meta.description}")
+            v = meta.default
+            if v is None:
+                lines.append(f"# {key} = null")
+            elif isinstance(v, str):
+                lines.append(f'{key} = "{v}"')
+            elif isinstance(v, bool):
+                lines.append(f"{key} = {'true' if v else 'false'}")
+            elif isinstance(v, list):
+                quoted = ", ".join(f'"{s}"' for s in v)
+                lines.append(f"{key} = [{quoted}]")
+            else:
+                lines.append(f"{key} = {v}")
+            lines.append("")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_default_config_template(path: Path, *, overwrite: bool = False) -> None:
+    """Write the full default config template to *path*."""
+    if path.exists() and not overwrite:
+        raise FileExistsError(f"{path} already exists (pass overwrite=True to replace)")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_default_config_template(), encoding="utf8")
 
 
 # ---------------------------------------------------------------------------
@@ -493,7 +549,7 @@ def config_get(dotted_key: str) -> Any:
     Parameters
     ----------
     dotted_key : str
-        A key from ``CONFIG_SCHEMA`` (e.g. ``"tui.page_size"``).
+        A key from ``CONFIG_SCHEMA`` (e.g. ``"trace.threshold_secs"``).
 
     Returns
     -------

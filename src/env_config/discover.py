@@ -14,9 +14,7 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
-import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -90,59 +88,28 @@ def _is_valid_for_family(path_or_name: str, family: str) -> bool:
 
 
 def _run_tracer(family: str, shell_path: str, args: list[str]) -> set[str]:
-    """Run a system tracer to capture opened files under $HOME.
+    """Run shell trace collection and return startup files under $HOME.
 
-    Returns a set of file basenames (relative to home) discovered.
-    If tracer not available or errors, returns an empty set.
+    Returns a set of home-relative file paths discovered.
+    If tracing fails, returns an empty set.
     """
     home = str(Path.home())
     files: set[str] = set()
 
-    # Default to shell-level tracing for portability across macOS/Linux.
-    # System tracers can be explicitly enabled via ENVCONFIG_USE_SYSTEM_TRACER=1.
-    use_system_trace_env = os.environ.get("ENVCONFIG_USE_SYSTEM_TRACER")
-    if use_system_trace_env is None:
-        # Default to system tracer when available (tests rely on this).
-        use_system_tracer = shutil.which("strace") is not None
-    else:
-        use_system_tracer = use_system_trace_env.lower() in ("1", "true", "yes")
-
-    # If explicitly requested, prefer system tracer where available (strace).
-    # Otherwise use shell-level tracer implemented in `trace.py`.
-    if use_system_tracer and shutil.which("strace"):
-        cmd = ["strace", "-e", "open,openat", shell_path] + args
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            out = proc.stderr + "\n" + proc.stdout
-        except Exception:
-            out = ""
-
-        # Parse lines looking for file paths quoted in syscalls, e.g.
-        # openat(AT_FDCWD, "/home/user/.bashrc", O_RDONLY) = 3
-        # open("/home/user/.bash_profile", O_RDONLY) = -1 ENOENT (No such file)
-        # We search for patterns like ".../path..." and keep those under $HOME
-        path_pat = re.compile(r'"(/[^"\s]+)"')
-        for line in out.splitlines():
-            for m in path_pat.finditer(line):
-                pth = m.group(1)
-                if home and pth.startswith(home):
-                    # record basename relative to home
-                    rel = os.path.relpath(pth, home)
-                    files.add(rel)
-        return files
-
-    # Fall back to shell-level tracer
     try:
         # import here to avoid top-level dependency cycles
-        from .trace import parse_trace, run_shell_trace
+        from .trace import collect_startup_file_traces
 
-        # run_shell_trace accepts family and will honor ENVCONFIG_MOCK_TRACE_DIR
-        trace_txt = run_shell_trace(family, shell_path, args=args, dry_run=False)
-        if not trace_txt:
+        traces = collect_startup_file_traces(
+            family,
+            shell_path=shell_path,
+            args=args,
+            dry_run=False,
+        )
+        if isinstance(traces, str):
             return set()
-        ftraces = parse_trace(trace_txt, family=family)
         home = str(Path.home())
-        for ft in ftraces:
+        for ft in traces:
             # Only include files under $HOME (user's startup files)
             abs_path = os.path.normpath(os.path.abspath(os.path.expanduser(ft.path)))
             if home and not abs_path.startswith(home):
@@ -221,7 +188,8 @@ def discover_startup_files_modes(
         seen: set[str] = set()
 
         # Prioritize traced: when we have traced files, use them as authoritative.
-        # Filter to family-appropriate files only (avoids wrong-shell traces e.g. zsh when tcsh fails).
+        # Filter to family-appropriate files only (avoids wrong-shell traces e.g.
+        # zsh when tcsh fails).
         for f in sorted(traced):
             if f and f not in seen and _is_valid_for_family(f, family):
                 result.append(f)

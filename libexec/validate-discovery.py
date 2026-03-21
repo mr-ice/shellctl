@@ -46,9 +46,7 @@ def main() -> int:
     """Run validation and print results."""
     shelltree = PROJECT_ROOT / "shelltree"
     if not shelltree.is_dir():
-        print(
-            "error: shelltree/ not found. Run libexec/refresh-shelltree.py first."
-        )
+        print("error: shelltree/ not found. Run libexec/refresh-shelltree.py first.")
         return 1
 
     families = ("bash", "zsh", "tcsh")

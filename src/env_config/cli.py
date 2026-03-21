@@ -1,11 +1,13 @@
 """Command-line interface for env-config (scaffold)."""
 from __future__ import annotations
 
-import tabulate
 import argparse
 import logging
 import os
 import sys
+from pathlib import Path
+
+import tabulate
 
 from .detect_shell import detect_current_and_intended_shell
 
@@ -79,7 +81,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         dest="mode_filters",
         metavar="MODE",
-        help="Mode(s) to discover: li, ln, ni, nn, or full names. Repeat for multiple. Default: all",
+        help=(
+            "Mode(s) to discover: li, ln, ni, nn, or full names. Repeat for multiple. "
+            "Default: all"
+        ),
     )
     disc.add_argument("--tui", action="store_true", help="Show discovery in the TUI")
     trace_p = sub.add_parser(
@@ -90,7 +95,10 @@ def build_parser() -> argparse.ArgumentParser:
     trace_p.add_argument(
         "--mode",
         metavar="MODE",
-        help="Mode: li, ln, ni, nn (or full names). Short tags: li=login_interactive, ln=login_noninteractive, ni=nonlogin_interactive, nn=nonlogin_noninteractive",
+        help=(
+            "Mode: li, ln, ni, nn (or full names). Short tags: li=login_interactive, "
+            "ln=login_noninteractive, ni=nonlogin_interactive, nn=nonlogin_noninteractive"
+        ),
     )
     trace_p.add_argument(
         "--dry-run", action="store_true", help="Print the tracer command and do not execute it"
@@ -136,6 +144,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     reset_p = config_sub.add_parser("reset", help="Reset a config key to default")
     reset_p.add_argument("key", help="Dotted config key to reset")
+    init_global_p = config_sub.add_parser(
+        "init-global",
+        help="Write full global config template with all keys/defaults",
+    )
+    init_global_p.add_argument(
+        "--path",
+        help="Output path (default: global config path)",
+    )
+    init_global_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing file",
+    )
+
+    settings_p = sub.add_parser(
+        "settings",
+        help="Quick config edits: `env-config settings key = value`",
+    )
+    settings_p.add_argument(
+        "tokens",
+        nargs="*",
+        help="Examples: `show`, `get trace.threshold_secs`, `trace.threshold_secs = 0.05`",
+    )
 
     # --- backup / archive / restore / list-backups ---
     backup_p = sub.add_parser("backup", help="Back up discovered startup files to a tar.gz archive")
@@ -318,9 +349,57 @@ def _handle_config(args: argparse.Namespace) -> int:
         return _handle_config_set(args.key, args.value, getattr(args, "append", False))
     if config_cmd == "reset":
         return _handle_config_reset(args.key)
+    if config_cmd == "init-global":
+        from .config import global_config_path, write_default_config_template
 
-    print("usage: env-config config {show,get,set,reset} [key] ...", file=sys.stderr)
+        out_path = getattr(args, "path", None)
+        target = Path(out_path) if out_path else global_config_path()
+        try:
+            write_default_config_template(target, overwrite=getattr(args, "force", False))
+        except FileExistsError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"wrote global config template: {target}")
+        return 0
+
+    print("usage: env-config config {show,get,set,reset,init-global} ...", file=sys.stderr)
     return 1
+
+
+def _handle_settings(tokens: list[str]) -> int:
+    """Handle quick settings UX (assignment-style syntax)."""
+    if not tokens or tokens[0] in ("show", "list"):
+        return _handle_config_show()
+
+    head = tokens[0].lower()
+    if head in ("get", "show") and len(tokens) >= 2:
+        return _handle_config_get(tokens[1])
+    if head in ("reset", "unset") and len(tokens) >= 2:
+        return _handle_config_reset(tokens[1])
+    if head == "set" and len(tokens) >= 3:
+        return _handle_config_set(tokens[1], tokens[2:], append=False)
+
+    key: str
+    values: list[str]
+    if "=" in tokens[0]:
+        key, first_val = tokens[0].split("=", 1)
+        values = ([first_val] if first_val else []) + tokens[1:]
+    elif len(tokens) >= 3 and tokens[1] == "=":
+        key = tokens[0]
+        values = tokens[2:]
+    elif len(tokens) >= 2:
+        key = tokens[0]
+        values = tokens[1:]
+    else:
+        print("usage: env-config settings <key> = <value>", file=sys.stderr)
+        return 1
+
+    key = key.strip()
+    values = [v for v in values if v != ""]
+    if not key or not values:
+        print("usage: env-config settings <key> = <value>", file=sys.stderr)
+        return 1
+    return _handle_config_set(key, values, append=False)
 
 
 def _resolve_family(args: argparse.Namespace) -> str:
@@ -651,7 +730,7 @@ def main(argv: list[str] | None = None) -> int:
                 from .discover import clear_cache
 
                 clear_cache(family)
-            from .modes import resolve_modes
+            from .modes import mode_to_args, resolve_modes
 
             mode_list = resolve_modes(getattr(args, "mode_filters", None))
             modes = discover_startup_files_modes(
@@ -663,9 +742,36 @@ def main(argv: list[str] | None = None) -> int:
             )
             if getattr(args, "tui", False):
                 try:
+                    from .trace import collect_startup_file_traces
                     from .tui import display_discovery_tui
 
-                    display_discovery_tui(modes)
+                    details: dict[str, dict[str, dict[str, float | int | str]]] = {}
+                    for mode_name in modes:
+                        mode_args = mode_to_args(family, mode_name)
+                        traces = collect_startup_file_traces(
+                            family,
+                            shell_path=shell_path,
+                            args=mode_args,
+                        )
+                        if isinstance(traces, str):
+                            continue
+                        per_mode: dict[str, dict[str, float | int | str]] = {}
+                        for ft in traces:
+                            abs_path = os.path.normpath(
+                                os.path.abspath(os.path.expanduser(ft.path))
+                            )
+                            rel_path = os.path.relpath(abs_path, os.path.expanduser("~"))
+                            info = {
+                                "path": abs_path,
+                                "commands": ft.commands,
+                                "duration": ft.duration,
+                            }
+                            per_mode[abs_path] = info
+                            per_mode[rel_path] = info
+                            per_mode[os.path.basename(abs_path)] = info
+                        details[mode_name] = per_mode
+
+                    display_discovery_tui(modes, details=details)
                     return 0
                 except Exception as e:
                     print("TUI failed:", e)
@@ -690,7 +796,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "trace":
-        from .trace import parse_trace, run_shell_trace
+        from .trace import analyze_traces, collect_startup_file_traces
 
         family = getattr(args, "family", None)
         shell_path = getattr(args, "shell_path", None)
@@ -734,18 +840,23 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"CHOICE: family={family} shell={chosen_shell}")
 
-        raw = run_shell_trace(
-            family, shell_path=shell_path, args=args_list, dry_run=dry, output_file=out_file
+        traces = collect_startup_file_traces(
+            family,
+            shell_path=shell_path,
+            args=args_list,
+            dry_run=dry,
+            output_file=out_file,
         )
-        # If dry-run returned a string starting with DRYRUN, print and exit
-        if isinstance(raw, str) and raw.startswith("DRYRUN:"):
-            print(raw)
+        # If dry-run returned a command string, print and exit.
+        if isinstance(traces, str) and traces.startswith("DRYRUN:"):
+            print(traces)
             return 0
 
-        parsed = parse_trace(raw, family=family)
-        from .trace import analyze_traces
-
-        analysis = analyze_traces(parsed, threshold_secs=thresh_secs, threshold_percent=thresh_pct)
+        analysis = analyze_traces(
+            traces,
+            threshold_secs=thresh_secs,
+            threshold_percent=thresh_pct,
+        )
 
         if getattr(args, "tui", False):
             try:
@@ -770,6 +881,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "config":
         return _handle_config(args)
+    if args.cmd == "settings":
+        return _handle_settings(getattr(args, "tokens", []))
 
     if args.cmd == "backup":
         return _handle_backup(args)

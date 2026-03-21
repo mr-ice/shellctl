@@ -128,6 +128,98 @@ def display_trace_tui(analysis: dict[str, Any]) -> None:
         items = analysis.get("items", [])
         h, w = stdscr.getmaxyx()
         display_lines = h - 8
+
+        def _open_in_editor(path: str) -> bool:
+            editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vi"
+            try:
+                curses.endwin()
+                subprocess.run([editor, path])
+                stdscr.refresh()
+                return True
+            except Exception:
+                return False
+
+        def _view_file_contents(path: str) -> None:
+            try:
+                with open(path, encoding="utf8", errors="replace") as fh:
+                    lines = fh.read().splitlines()
+            except Exception as exc:
+                lines = [f"Failed to read {path}: {exc}"]
+
+            top_line = 0
+            while True:
+                stdscr.clear()
+                stdscr.border()
+                h2, w2 = stdscr.getmaxyx()
+                stdscr.addstr(1, 2, f"Viewing: {path}"[: w2 - 4])
+                stdscr.addstr(2, 2, "Up/Down scroll  PgUp/PgDn page  q back")
+                body_h = h2 - 6
+                for i in range(max(0, body_h)):
+                    idx = top_line + i
+                    if idx >= len(lines):
+                        break
+                    try:
+                        stdscr.addstr(4 + i, 2, lines[idx][: w2 - 4])
+                    except curses.error:
+                        pass
+                try:
+                    max_lines = max(1, len(lines))
+                    first_line = min(max_lines, top_line + 1)
+                    last_visible_idx = min(len(lines), top_line + max(0, body_h))
+                    last_is_end = len(lines) > 0 and last_visible_idx >= len(lines)
+                    last_label = "END" if last_is_end else str(max(first_line, last_visible_idx))
+                    stdscr.addstr(h2 - 2, 2, f"Lines {first_line}-{last_label}/{max_lines}")
+                except curses.error:
+                    pass
+                stdscr.refresh()
+
+                ch2 = stdscr.getch()
+                if ch2 in (ord("q"), ord("Q"), 27):
+                    return
+                if ch2 in (curses.KEY_DOWN, ord("j")):
+                    if top_line < max(0, len(lines) - 1):
+                        top_line += 1
+                elif ch2 in (curses.KEY_UP, ord("k")):
+                    top_line = max(0, top_line - 1)
+                elif ch2 in (curses.KEY_NPAGE,):
+                    top_line = min(max(0, len(lines) - 1), top_line + max(1, body_h))
+                elif ch2 in (curses.KEY_PPAGE,):
+                    top_line = max(0, top_line - max(1, body_h))
+
+        def _show_details(item: dict[str, Any]) -> None:
+            path = resolve_path(str(item.get("file", "")))
+            while True:
+                stdscr.clear()
+                stdscr.border()
+                h2, w2 = stdscr.getmaxyx()
+                stdscr.addstr(1, 2, f"Details for: {item.get('file')}"[: w2 - 4])
+                stdscr.addstr(3, 2, f"Path: {path}"[: w2 - 4])
+                stdscr.addstr(4, 2, f"Exists: {'yes' if os.path.exists(path) else 'no'}")
+                stdscr.addstr(6, 2, f"Trace commands: {item.get('commands', 0)}")
+                stdscr.addstr(
+                    7,
+                    2,
+                    f"Trace duration: {float(item.get('duration', 0.0)):.6f}s",
+                )
+                stdscr.addstr(8, 2, f"Percent: {float(item.get('percent', 0.0)):.2f}%")
+                stdscr.addstr(
+                    9,
+                    2,
+                    f"Reasons: {', '.join(item.get('reasons', [])) or '-'}"[: w2 - 4],
+                )
+                stdscr.addstr(h2 - 3, 2, "v=view file  o=open editor  any other key=back")
+                stdscr.refresh()
+
+                ch2 = stdscr.getch()
+                if ch2 in (ord("v"), ord("V")):
+                    _view_file_contents(path)
+                    continue
+                if ch2 in (ord("o"), ord("O")):
+                    if os.path.exists(path):
+                        _open_in_editor(path)
+                    continue
+                return
+
         _draw_screen(stdscr, analysis, top, selected)
         while True:
             ch = stdscr.getch()
@@ -147,18 +239,8 @@ def display_trace_tui(analysis: dict[str, Any]) -> None:
                 # refresh screen
                 pass
             elif ch in (curses.KEY_ENTER, 10, 13):
-                # show details popup
                 if 0 <= selected < len(items):
-                    it = items[selected]
-                    stdscr.clear()
-                    stdscr.border()
-                    stdscr.addstr(1, 2, f"Details for: {it.get('file')}")
-                    stdscr.addstr(3, 2, f"Duration: {it.get('duration'):.6f}s")
-                    stdscr.addstr(4, 2, f"Commands: {it.get('commands')}")
-                    stdscr.addstr(5, 2, f"Percent: {it.get('percent'):.2f}%")
-                    stdscr.addstr(7, 2, f"Reasons: {', '.join(it.get('reasons', []))}")
-                    stdscr.addstr(h - 2, 2, "Press any key to return")
-                    stdscr.getch()
+                    _show_details(items[selected])
             _draw_screen(stdscr, analysis, top, selected)
 
     curses.wrapper(_wrapper)
@@ -169,7 +251,10 @@ def launch_tui() -> None:
     raise NotImplementedError("Use display_trace_tui(analysis) to show trace results")
 
 
-def display_discovery_tui(modes: dict[str, list[str]]) -> None:
+def display_discovery_tui(
+    modes: dict[str, list[str]],
+    details: dict[str, dict[str, dict[str, Any]]] | None = None,
+) -> None:
     """Display discovery per-mode results in a simple TUI.
 
     Controls:
@@ -191,7 +276,11 @@ def display_discovery_tui(modes: dict[str, list[str]]) -> None:
             stdscr.border()
             h, w = stdscr.getmaxyx()
             stdscr.addstr(1, 2, "env-config: discovery (per-mode)")
-            stdscr.addstr(2, 2, "Left/Right: switch mode  Up/Down: move  Enter: details  q: quit")
+            stdscr.addstr(
+                2,
+                2,
+                "Left/Right: switch mode  Up/Down: move  Enter: details  q: quit",
+            )
             stdscr.addstr(4, 2, f"Mode: {mode_keys[mode_idx]}")
             items = modes.get(mode_keys[mode_idx], [])
             header_y = 6
@@ -211,8 +300,104 @@ def display_discovery_tui(modes: dict[str, list[str]]) -> None:
                         stdscr.addstr(y, 2, line)
                 except curses.error:
                     pass
-            stdscr.addstr(h - 2, 2, "q=quit")
+            stdscr.addstr(h - 2, 2, "q=quit  o=open editor  b=backup  d=disable")
             stdscr.refresh()
+
+        def _view_file_contents(path: str) -> None:
+            try:
+                with open(path, encoding="utf8", errors="replace") as fh:
+                    lines = fh.read().splitlines()
+            except Exception as exc:
+                lines = [f"Failed to read {path}: {exc}"]
+
+            top_line = 0
+            while True:
+                stdscr.clear()
+                stdscr.border()
+                h, w = stdscr.getmaxyx()
+                stdscr.addstr(1, 2, f"Viewing: {path}"[: w - 4])
+                stdscr.addstr(2, 2, "Up/Down scroll  PgUp/PgDn page  q back")
+                body_h = h - 6
+                for i in range(max(0, body_h)):
+                    idx = top_line + i
+                    if idx >= len(lines):
+                        break
+                    try:
+                        stdscr.addstr(4 + i, 2, lines[idx][: w - 4])
+                    except curses.error:
+                        pass
+                try:
+                    max_lines = max(1, len(lines))
+                    first_line = min(max_lines, top_line + 1)
+                    last_visible_idx = min(len(lines), top_line + max(0, body_h))
+                    last_is_end = len(lines) > 0 and last_visible_idx >= len(lines)
+                    last_label = "END" if last_is_end else str(max(first_line, last_visible_idx))
+                    stdscr.addstr(
+                        h - 2,
+                        2,
+                        f"Lines {first_line}-{last_label}/{max_lines}",
+                    )
+                except curses.error:
+                    pass
+                stdscr.refresh()
+
+                ch = stdscr.getch()
+                if ch in (ord("q"), ord("Q"), 27):
+                    return
+                if ch in (curses.KEY_DOWN, ord("j")):
+                    if top_line < max(0, len(lines) - 1):
+                        top_line += 1
+                elif ch in (curses.KEY_UP, ord("k")):
+                    top_line = max(0, top_line - 1)
+                elif ch in (curses.KEY_NPAGE,):
+                    top_line = min(max(0, len(lines) - 1), top_line + max(1, body_h))
+                elif ch in (curses.KEY_PPAGE,):
+                    top_line = max(0, top_line - max(1, body_h))
+
+        def _show_details(name: str, mode: str) -> None:
+            path = resolve_path(name)
+            per_mode = details.get(mode, {}) if details else {}
+            info = per_mode.get(name) or per_mode.get(path) or {}
+            present_in_modes = [mk for mk, items in modes.items() if name in items or path in items]
+            while True:
+                stdscr.clear()
+                stdscr.border()
+                h, w = stdscr.getmaxyx()
+                stdscr.addstr(1, 2, f"Details for: {name}"[: w - 4])
+                stdscr.addstr(3, 2, f"Mode: {mode}"[: w - 4])
+                stdscr.addstr(4, 2, f"Path: {path}"[: w - 4])
+                stdscr.addstr(5, 2, f"Exists: {'yes' if os.path.exists(path) else 'no'}")
+                stdscr.addstr(
+                    6,
+                    2,
+                    f"Loaded in modes: {', '.join(present_in_modes) or '-'}"[: w - 4],
+                )
+                if os.path.exists(path):
+                    try:
+                        stdscr.addstr(7, 2, f"Size: {os.path.getsize(path)} bytes")
+                    except OSError:
+                        pass
+                if info:
+                    stdscr.addstr(9, 2, f"Trace commands: {info.get('commands', 0)}")
+                    stdscr.addstr(
+                        10,
+                        2,
+                        f"Trace duration: {float(info.get('duration', 0.0)):.6f}s",
+                    )
+                stdscr.addstr(h - 3, 2, "v=view file  o=open editor  any other key=back")
+                stdscr.refresh()
+
+                ch = stdscr.getch()
+                if ch in (ord("v"), ord("V")):
+                    _view_file_contents(path)
+                    continue
+                if ch in (ord("o"), ord("O")):
+                    if os.path.exists(path):
+                        _open_in_editor(path)
+                    else:
+                        _status("File does not exist")
+                    continue
+                return
 
         def _confirm(prompt: str) -> bool:
             stdscr.clear()
@@ -278,12 +463,7 @@ def display_discovery_tui(modes: dict[str, list[str]]) -> None:
                 items = modes.get(mode_keys[mode_idx], [])
                 if 0 <= selected_idx < len(items):
                     it = items[selected_idx]
-                    stdscr.clear()
-                    stdscr.border()
-                    stdscr.addstr(1, 2, f"Details for: {it}")
-                    stdscr.addstr(3, 2, f"Path: {it}")
-                    stdscr.addstr(5, 2, "Press any key to return")
-                    stdscr.getch()
+                    _show_details(it, mode_keys[mode_idx])
             elif ch in (ord("b"), ord("B")):
                 items = modes.get(mode_keys[mode_idx], [])
                 if 0 <= selected_idx < len(items):

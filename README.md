@@ -139,15 +139,21 @@ Current implemented features (prototype)
 Global config: `/etc/env-config.toml` (optional)
 User config: `~/.env-config.toml` (optional)
 
+Generate a full site-wide defaults template (all keys):
+
+```bash
+env-config config init-global --path ./config/env-config.global.defaults.toml
+```
+
+There is also a checked-in template at
+`config/env-config.global.defaults.toml`.
+
 Config keys of interest (example):
 
 ```toml
 [trace]
 threshold_secs = 0.5
 threshold_percent = 10.0
-
-[tui]
-page_size = 20
 ```
 
 User level config overrides global ones.
@@ -164,9 +170,6 @@ env-config config show compose.paths   # show just one key's value
 Get a single key:
 
 ```bash
-env-config config get tui.page_size
-# 20
-
 env-config config get trace.threshold_secs
 # None
 ```
@@ -174,9 +177,6 @@ env-config config get trace.threshold_secs
 Set a value in the user config (`~/.env-config.toml`):
 
 ```bash
-# integer
-env-config config set tui.page_size 50
-
 # float
 env-config config set trace.threshold_secs 0.05
 
@@ -193,11 +193,19 @@ env-config config set compose.paths /opt/shell-extras /usr/local/etc/env
 env-config config set compose.paths /another/path --append
 ```
 
+Quick user-setting shortcut:
+
+```bash
+env-config settings trace.threshold_percent = 50
+env-config settings trace.threshold_secs=0.05
+env-config settings show
+```
+
 Reset a key (removes it from the user config, reverting to the
 global or default value):
 
 ```bash
-env-config config reset tui.page_size
+env-config config reset trace.threshold_percent
 ```
 
 Open the user config in `$EDITOR` with live validation (invalid

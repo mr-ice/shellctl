@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Re-create the shelltree directory with random files."""
-import shutil
 import random
+import shutil
 import string
 from pathlib import Path
 
@@ -17,15 +17,16 @@ tcsh.mkdir(parents=True, exist_ok=True)
 
 bash_profile = random.choice([".bash_profile", ".bash_login", ".profile"])
 
+
 def create_random_files(path: Path, file: str):
     """Create random files for testing discovery of startup files."""
-
     # choose between 0 and 4 additional files, weighted toward 0 and 1
-    for _ in range(random.choice([0]*6 + [1]*8 + [2]*3 + [3]*2 + [4])):
+    for _ in range(random.choice([0] * 6 + [1] * 8 + [2] * 3 + [3] * 2 + [4])):
         tag = "".join(random.choices(string.ascii_letters, k=3))
         with open(path / f"{file}-{tag}", "w") as f:
             f.write(f"# {file}-{tag}\n")
             f.write(":\n")
+
 
 for file in [
     ".bashrc",
@@ -34,8 +35,8 @@ for file in [
     with open(bash / file, "w") as f:
         f.write(f"# {file}\n")
         f.write(f"for f in ~/{file}-*; do\n")
-        f.write(f"    source $f\n")
-        f.write(f"done\n")
+        f.write("    source $f\n")
+        f.write("done\n")
 
     create_random_files(bash, file)
 
@@ -50,8 +51,8 @@ for file in [
         f.write(f"# {file}\n")
         f.write("export NULL_GLOB=1\n")
         f.write(f"for f in ~/{file}-*; do\n")
-        f.write(f"    source $f\n")
-        f.write(f"done\n")
+        f.write("    source $f\n")
+        f.write("done\n")
 
     create_random_files(zsh, file)
 
@@ -82,7 +83,7 @@ with open(zshlib / "mkcd", "w") as f:
 with open(zshlib / "py", "w") as f:
     f.write("# .zshlib/py from michael's home directory\n")
     f.write("py() {\n")
-    f.write("    python3 \"$@\"\n")
+    f.write('    python3 "$@"\n')
     f.write("}\n")
 
 for file in [

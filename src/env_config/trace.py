@@ -20,13 +20,11 @@ from __future__ import annotations
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import tempfile
 import time
-from pathlib import Path
-
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -359,14 +357,17 @@ def parse_zsh_trace(trace_text: str) -> dict[str, FileTrace]:
             next_ts += delta
             rest = line
 
-        # look for explicit path token (absolute path)
-        p = re.search(r"(/[^\s:]+)[:]?\d*", rest)
-        if p:
-            src_path = _expand_trace_path(p.group(1))
+        # Prefer explicit source target (source/. file) over PS4 prefix file.
+        # Example: "+.../.zshlib/all:4> source .../.zshlib/mkcd" should
+        # attribute to mkcd, not all.
+        m2 = source_pat.search(rest)
+        if m2:
+            src_path = _expand_trace_path(m2.group(1))
         else:
-            m2 = source_pat.search(rest)
-            if m2:
-                src_path = _expand_trace_path(m2.group(1))
+            # fallback to explicit path token (often PS4 file:line prefix)
+            p = re.search(r"(/[^\s:]+)[:]?\d*", rest)
+            if p:
+                src_path = _expand_trace_path(p.group(1))
             else:
                 # skip lines without clear source
                 continue
@@ -408,13 +409,9 @@ def parse_tcsh_trace(trace_text: str) -> dict[str, FileTrace]:
             ts = float(mst.group(1))
             src_path = _expand_trace_path(mst.group(2))
             if src_path.startswith("."):
-                src_path = os.path.normpath(
-                    os.path.join(os.path.expanduser("~"), src_path)
-                )
+                src_path = os.path.normpath(os.path.join(os.path.expanduser("~"), src_path))
             if src_path not in files:
-                files[src_path] = FileTrace(
-                    path=src_path, first_ts=ts, last_ts=ts, commands=1
-                )
+                files[src_path] = FileTrace(path=src_path, first_ts=ts, last_ts=ts, commands=1)
             else:
                 ft = files[src_path]
                 ft.last_ts = ts
@@ -528,6 +525,32 @@ def parse_trace(trace_text: str, family: str = "bash") -> list[FileTrace]:
     out = list(files.values())
     out.sort(key=lambda f: f.duration, reverse=True)
     return out
+
+
+def collect_startup_file_traces(
+    family: str,
+    shell_path: str | None = None,
+    args: list[str] | None = None,
+    *,
+    dry_run: bool = False,
+    output_file: str | None = None,
+    timeout: int = 15,
+) -> list[FileTrace] | str:
+    """Collect startup trace text and parse it into per-file records.
+
+    Returns parsed traces, or a DRYRUN string when ``dry_run`` is true.
+    """
+    raw = run_shell_trace(
+        family,
+        shell_path=shell_path,
+        args=args,
+        timeout=timeout,
+        dry_run=dry_run,
+        output_file=output_file,
+    )
+    if isinstance(raw, str) and raw.startswith("DRYRUN:"):
+        return raw
+    return parse_trace(raw, family=family)
 
 
 def analyze_traces(

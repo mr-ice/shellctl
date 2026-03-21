@@ -1,12 +1,6 @@
 """Tests for compose file selection and installation."""
 from __future__ import annotations
 
-import json
-import os
-from pathlib import Path
-
-import pytest
-
 from env_config.compose import (
     ComposeFile,
     _extract_summary,

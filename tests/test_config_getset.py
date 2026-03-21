@@ -10,8 +10,11 @@ from env_config.config import (
     config_show,
     delete_nested,
     get_nested,
+    global_config_path,
     load_merged_config,
+    render_default_config_template,
     set_nested,
+    write_default_config_template,
 )
 
 # -- nested-dict helpers ----------------------------------------------------
@@ -88,7 +91,7 @@ class TestConfigGet:
     """Tests for config_get."""
 
     def test_default_value(self, _isolate_config):
-        assert config_get("tui.page_size") == 20
+        assert config_get("trace.threshold_percent") is None
 
     def test_unknown_key_raises(self, _isolate_config):
         with pytest.raises(KeyError, match="unknown config key"):
@@ -96,8 +99,8 @@ class TestConfigGet:
 
     def test_reads_user_value(self, _isolate_config):
         user_cfg, _ = _isolate_config
-        user_cfg.write_text(tomli_w.dumps({"tui": {"page_size": 50}}))
-        assert config_get("tui.page_size") == 50
+        user_cfg.write_text(tomli_w.dumps({"trace": {"threshold_percent": 50}}))
+        assert config_get("trace.threshold_percent") == 50
 
 
 # -- config_set -------------------------------------------------------------
@@ -107,16 +110,16 @@ class TestConfigSet:
     """Tests for config_set."""
 
     def test_set_and_get_roundtrip(self, _isolate_config):
-        config_set("tui.page_size", 30)
-        assert config_get("tui.page_size") == 30
+        config_set("trace.threshold_percent", 30.0)
+        assert config_get("trace.threshold_percent") == 30.0
 
     def test_unknown_key_raises(self, _isolate_config):
         with pytest.raises(KeyError, match="unknown config key"):
             config_set("bogus.key", 1)
 
     def test_wrong_type_raises(self, _isolate_config):
-        with pytest.raises(ValueError, match="expects int"):
-            config_set("tui.page_size", "not_int")
+        with pytest.raises(ValueError, match="expects float_or_null"):
+            config_set("trace.threshold_percent", "not_float")
 
     def test_set_float_or_null(self, _isolate_config):
         config_set("trace.threshold_secs", 0.05)
@@ -139,16 +142,16 @@ class TestConfigReset:
     """Tests for config_reset."""
 
     def test_reset_reverts_to_default(self, _isolate_config):
-        config_set("tui.page_size", 50)
-        config_reset("tui.page_size")
-        assert config_get("tui.page_size") == 20
+        config_set("trace.threshold_percent", 50.0)
+        config_reset("trace.threshold_percent")
+        assert config_get("trace.threshold_percent") is None
 
     def test_reset_unknown_key_raises(self, _isolate_config):
         with pytest.raises(KeyError, match="unknown config key"):
             config_reset("bogus.key")
 
     def test_reset_unset_key_is_noop(self, _isolate_config):
-        config_reset("tui.page_size")  # should not raise
+        config_reset("trace.threshold_percent")  # should not raise
 
 
 # -- config_show ------------------------------------------------------------
@@ -162,9 +165,9 @@ class TestConfigShow:
         assert set(values.keys()) == set(CONFIG_SCHEMA.keys())
 
     def test_reflects_user_values(self, _isolate_config):
-        config_set("tui.page_size", 99)
+        config_set("trace.threshold_percent", 99.0)
         values = config_show()
-        assert values["tui.page_size"] == 99
+        assert values["trace.threshold_percent"] == 99.0
 
 
 # -- load_merged_config (append strategy) -----------------------------------
@@ -192,3 +195,22 @@ class TestMergeAppend:
         global_cfg.write_text(tomli_w.dumps({"compose": {"paths": ["/global"]}}))
         merged = load_merged_config()
         assert merged["compose"]["paths"] == ["/global"]
+
+
+class TestGlobalTemplate:
+    """Tests for global template helpers."""
+
+    def test_render_contains_sections(self, _isolate_config):
+        text = render_default_config_template()
+        assert "[trace]" in text
+        assert "[compose]" in text
+
+    def test_write_template_file(self, _isolate_config, tmp_path):
+        p = tmp_path / "env-config.toml"
+        write_default_config_template(p)
+        assert p.exists()
+
+    def test_global_path_env_override(self, _isolate_config, monkeypatch, tmp_path):
+        p = tmp_path / "site.toml"
+        monkeypatch.setenv("ENVCONFIG_GLOBAL_CONFIG_PATH", str(p))
+        assert global_config_path() == p

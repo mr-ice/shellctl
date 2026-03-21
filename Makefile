@@ -119,3 +119,6 @@ validate-discovery:  ## Validate discovery of startup files
 .PHONY: clean-tcsh
 clean-tcsh:  ## Remove tcsh source tree and tcsh-src/tcsh
 	rm -rf $(TCSH_DIR) $(TCSH_INSTALL)
+
+coverage:  ## Run coverage
+	env - $$(which uv) run pytest --cov=src --cov-report=term --cov-report=xml:coverage.xml
