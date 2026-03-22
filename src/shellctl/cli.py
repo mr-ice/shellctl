@@ -591,16 +591,41 @@ def _handle_compose(args: argparse.Namespace) -> int:
 
 def _handle_compose_list(family: str) -> int:
     """List available compose files with summaries."""
-    from .compose import list_compose_files
+    from .compose import list_compose_files, split_compose_by_summary_valid
 
     files = list_compose_files(family)
     if not files:
         print("No compose files found. Configure compose.paths in config.")
         return 0
-    for cf in files:
-        print(f"  {cf.dest_basename}")
-        print(f"    {cf.summary}")
-        print(f"    source: {cf.source_path}")
+    valid, invalid = split_compose_by_summary_valid(files)
+
+    pick_examples = {
+        "zsh": ".zshrc-NAME",
+        "bash": ".bashrc-NAME",
+        "tcsh": ".tcshrc-NAME",
+    }
+    pick_hint = pick_examples.get(family.lower(), ".<shell>rc-NAME")
+    print(
+        f"Install: shellctl compose pick {pick_hint} [...]  "
+        "(first column below; repeat basename or add several names in one command)"
+    )
+    print()
+
+    def _line(cf) -> str:
+        tag = "" if cf.summary_valid else " [invalid]"
+        return f"  {cf.dest_basename}{tag}  {cf.summary}"
+
+    for cf in valid:
+        print(_line(cf))
+
+    if invalid:
+        print()
+        print(
+            "Invalid compose files (below; fix with a leading # summary line before code; "
+            "#! lines are skipped)."
+        )
+        for cf in invalid:
+            print(_line(cf))
     return 0
 
 
@@ -639,7 +664,8 @@ def _handle_compose_pick(args: argparse.Namespace, family: str) -> int:
     if not getattr(args, "yes", False):
         print("Will install:")
         for cf in selections:
-            print(f"  {cf.source_path} -> ~/{cf.dest_basename}")
+            inv = "  [invalid: missing # summary as first line]" if not cf.summary_valid else ""
+            print(f"  {cf.source_path} -> ~/{cf.dest_basename}{inv}")
         answer = input("Proceed? [y/N] ").strip().lower()
         if answer != "y":
             print("cancelled")

@@ -1236,8 +1236,15 @@ def display_compose_pick_tui(family: str) -> list[str]:
     if not files:
         return []
 
-    # Build labels: dest_basename + truncated summary
-    labels = [f"{cf.dest_basename}  {cf.summary[:50]}" for cf in files]
+    # Valid entries first (list_compose_files order); mark invalid for visibility
+    labels = [
+        (
+            f"{cf.dest_basename}  {cf.summary[:50]}"
+            if cf.summary_valid
+            else f"[!] {cf.dest_basename}  {cf.summary[:42]}"
+        )
+        for cf in files
+    ]
     state = ChecklistState(items=labels, checked=[False] * len(files))
 
     installed: list[str] = []

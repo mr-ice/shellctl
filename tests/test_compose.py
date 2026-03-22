@@ -9,13 +9,16 @@ import pytest
 import tomli_w
 
 from shellctl.compose import (
+    INVALID_COMPOSE_SUMMARY,
     ComposeFile,
     _extract_summary,
+    _parse_compose_summary,
     _registry_path,
     _shell_rc_files_for_family,
     get_registry,
     install_compose_files,
     list_compose_files,
+    split_compose_by_summary_valid,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +42,7 @@ class TestExtractSummary:
     def test_first_non_comment_line(self, tmp_path):
         f = tmp_path / "zshrc-baz"
         f.write_text("\n\nsource /opt/thing/init.sh\n")
-        assert _extract_summary(f) == "source /opt/thing/init.sh"
+        assert _extract_summary(f) == ""
 
     def test_empty_file(self, tmp_path):
         f = tmp_path / "empty"
@@ -50,6 +53,30 @@ class TestExtractSummary:
         f = tmp_path / "zshrc-qux"
         f.write_text("  \n  \n")
         assert _extract_summary(f) == ""
+
+
+class TestParseComposeSummary:
+    """Tests for valid vs invalid compose header comments."""
+
+    def test_shebang_skipped_then_comment(self, tmp_path):
+        f = tmp_path / "frag"
+        f.write_text("#!/bin/sh\n# Real summary\ntrue\n")
+        assert _parse_compose_summary(f) == ("Real summary", True)
+
+    def test_shebang_only_is_invalid(self, tmp_path):
+        f = tmp_path / "frag"
+        f.write_text("#!/bin/sh\n")
+        assert _parse_compose_summary(f) == ("", False)
+
+    def test_hash_without_space(self, tmp_path):
+        f = tmp_path / "frag"
+        f.write_text("#compact\n")
+        assert _parse_compose_summary(f) == ("compact", True)
+
+    def test_code_first_line_invalid(self, tmp_path):
+        f = tmp_path / "frag"
+        f.write_text("source ~/.foo\n# not counted\n")
+        assert _parse_compose_summary(f) == ("", False)
 
 
 class TestShellRcFilesForFamily:
@@ -123,6 +150,35 @@ class TestListComposeFiles:
         assert by_name["fzf"].dest_basename == ".zshrc-fzf"
         assert by_name["fzf"].summary == "FZF key bindings"
         assert by_name["nvm"].summary == "NVM"
+        assert by_name["fzf"].summary_valid
+        assert by_name["nvm"].summary_valid
+
+    def test_invalid_summary_sorted_after_valid(self, tmp_path):
+        (tmp_path / "zshrc-bad").write_text("source /x\n# ignored\n")
+        (tmp_path / "zshrc-good").write_text("# Good one\n")
+        files = list_compose_files(
+            "zsh",
+            paths=[str(tmp_path)],
+            shell_rc_files=["zshrc"],
+            allow_non_repo=True,
+        )
+        assert [f.name for f in files] == ["good", "bad"]
+        assert files[0].summary_valid is True
+        assert files[1].summary_valid is False
+        assert files[1].summary == INVALID_COMPOSE_SUMMARY
+
+    def test_split_compose_by_summary_valid(self, tmp_path):
+        (tmp_path / "zshrc-a").write_text("# A\n")
+        (tmp_path / "zshrc-b").write_text("b\n")
+        files = list_compose_files(
+            "zsh",
+            paths=[str(tmp_path)],
+            shell_rc_files=["zshrc"],
+            allow_non_repo=True,
+        )
+        v, inv = split_compose_by_summary_valid(files)
+        assert len(v) == 1 and v[0].name == "a"
+        assert len(inv) == 1 and inv[0].name == "b"
 
     def test_deduplicates_same_name_from_different_paths(self, tmp_path):
         d1 = tmp_path / "dir1"
@@ -233,6 +289,11 @@ class TestListComposeFiles:
 class TestComposeFixtureRepos:
     """Integration checks against repos/compose/* sample trees."""
 
+    @pytest.fixture(autouse=True)
+    def _fixture_repos_allow_dirty_git(self, monkeypatch):
+        """Sample repos are often dirty in dev trees; still require main/master."""
+        monkeypatch.setenv("SHELLCTL_COMPOSE_ALLOW_DIRTY", "1")
+
     def test_team_a_tcsh_files_clean_main(self):
         if not COMPOSE_TEAM_A_ENV.is_dir():
             pytest.skip("repos/compose/teamA/env not present")
@@ -306,6 +367,7 @@ class TestInstallComposeFiles:
             name="fzf",
             dest_basename=".zshrc-fzf",
             summary="FZF",
+            summary_valid=True,
         )
 
         home = tmp_path / "home"
@@ -329,6 +391,7 @@ class TestInstallComposeFiles:
             name="fzf",
             dest_basename=".zshrc-fzf",
             summary="FZF",
+            summary_valid=True,
         )
 
         home = tmp_path / "home"

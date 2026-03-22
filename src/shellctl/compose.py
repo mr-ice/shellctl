@@ -9,6 +9,8 @@ Public API
 ----------
 list_compose_files(family, shell_rc_files, paths, allow_non_repo)
     Scan paths and return available compose files with metadata.
+split_compose_by_summary_valid(files)
+    Split results into valid vs invalid summary headers.
 install_compose_files(selections, home_dir)
     Copy selected files to home directory and update registry.
 get_registry()
@@ -34,6 +36,11 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Shown when the first non-blank, non-shebang line is not a ``#`` comment summary
+INVALID_COMPOSE_SUMMARY = (
+    "[invalid] first non-blank line must be a # comment (not #!); see PROJECT.md compose"
+)
 
 # Default RC file variants per shell family when config is empty
 DEFAULT_SHELL_RC_FILES: dict[str, list[str]] = {
@@ -65,7 +72,11 @@ class ComposeFile:
     dest_basename : str
         Target basename in home dir (e.g. .zshrc-fzf).
     summary : str
-        One-line description extracted from the file.
+        One-line description extracted from the file, or
+        :data:`INVALID_COMPOSE_SUMMARY` when the header rule is not met.
+    summary_valid : bool
+        False when the first substantive line is not a ``#`` summary comment
+        (after optional ``#!`` shebang lines).
     """
 
     source_path: str
@@ -73,40 +84,45 @@ class ComposeFile:
     name: str
     dest_basename: str
     summary: str
+    summary_valid: bool = True
 
 
-def _extract_summary(path: Path) -> str:
-    """Extract a one-line summary from a shell init file.
+def _parse_compose_summary(path: Path) -> tuple[str, bool]:
+    """Parse the required leading comment summary from a compose fragment.
 
-    Looks for the first significant line: a comment (# or ##) or the
-    first non-empty line. Strips leading # and whitespace.
-
-    Parameters
-    ----------
-    path : Path
-        Path to the file.
+    The first non-blank line must be a shell ``#`` comment (not ``#!``).
+    Any ``#!`` lines at the top are skipped so sourced fragments may keep a
+    shebang.
 
     Returns
     -------
-    str
-        Extracted summary, or empty string if none found.
+    tuple[str, bool]
+        ``(summary_text, True)`` when valid, or ``("", False)`` when invalid.
     """
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except Exception:
-        return ""
+        return ("", False)
+
     for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
-        # Remove leading # and ##
-        if line.startswith("##"):
-            return line[2:].strip()
+        if line.startswith("#!"):
+            continue
         if line.startswith("#"):
-            return line[1:].strip()
-        # First non-comment line as fallback
-        return line[:80] + ("..." if len(line) > 80 else "")
-    return ""
+            body = line.lstrip("#").strip()
+            if not body:
+                return ("(empty # comment)", True)
+            return (body, True)
+        return ("", False)
+    return ("", False)
+
+
+def _extract_summary(path: Path) -> str:
+    """Return the summary text only; empty string if invalid or unreadable."""
+    summary, valid = _parse_compose_summary(path)
+    return summary if valid else ""
 
 
 def _compose_allow_dirty_from_env() -> bool:
@@ -230,7 +246,9 @@ def list_compose_files(
     Returns
     -------
     list[ComposeFile]
-        Available compose files with metadata.
+        Available compose files with metadata. Entries with invalid summaries
+        (no leading ``#`` comment per :func:`_parse_compose_summary`) are sorted
+        after all valid entries.
     """
     from .config import load_merged_config
 
@@ -298,12 +316,15 @@ def list_compose_files(
                 seen.add(key)
 
                 dest_basename = f".{rc_base}-{name}"
-                summary = _extract_summary(entry)
+                summary, summary_valid = _parse_compose_summary(entry)
+                if not summary_valid:
+                    summary = INVALID_COMPOSE_SUMMARY
                 logger.debug(
-                    "list_compose_files: found %s -> %s (summary=%r)",
+                    "list_compose_files: found %s -> %s (summary=%r valid=%s)",
                     entry.name,
                     dest_basename,
                     summary[:50] if summary else "",
+                    summary_valid,
                 )
                 result.append(
                     ComposeFile(
@@ -311,7 +332,8 @@ def list_compose_files(
                         rc_base=rc_base,
                         name=name,
                         dest_basename=dest_basename,
-                        summary=summary or "(no description)",
+                        summary=summary,
+                        summary_valid=summary_valid,
                     )
                 )
 
@@ -320,7 +342,24 @@ def list_compose_files(
         len(result),
         len(paths),
     )
-    return sorted(result, key=lambda c: (c.rc_base, c.name))
+    return sorted(
+        result,
+        key=lambda c: (0 if c.summary_valid else 1, c.rc_base, c.name),
+    )
+
+
+def split_compose_by_summary_valid(
+    files: list[ComposeFile],
+) -> tuple[list[ComposeFile], list[ComposeFile]]:
+    """Split *files* into valid-summary and invalid-summary lists.
+
+    Order within each list follows *files* order.
+    """
+    valid: list[ComposeFile] = []
+    invalid: list[ComposeFile] = []
+    for f in files:
+        (valid if f.summary_valid else invalid).append(f)
+    return valid, invalid
 
 
 def get_registry() -> list[dict[str, Any]]:
