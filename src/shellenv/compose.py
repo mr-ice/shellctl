@@ -26,10 +26,10 @@ Environment (testing)
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -220,6 +220,64 @@ def _shell_rc_files_for_family(
     return DEFAULT_SHELL_RC_FILES.get(family.lower(), ["zshrc", "zshenv", "zprofile"])
 
 
+def _looks_like_git_url(value: str) -> bool:
+    """Return True when *value* looks like a git clone URL."""
+    return "://" in value or value.startswith("git@")
+
+
+def _compose_sources_root(cfg: dict[str, Any]) -> Path:
+    """Return local clone root for compose source URLs."""
+    tool_root = cfg.get("shellenv", {}).get("tool_repo_path") or "~/.shellenv"
+    return Path(str(tool_root)).expanduser() / "compose-sources"
+
+
+def _source_repo_dir_for_id(source_id: str, root: Path) -> Path:
+    """Map a source identifier to a deterministic local clone directory."""
+    token = hashlib.sha1(source_id.encode("utf-8")).hexdigest()[:12]  # noqa: S324
+    tail = source_id.rstrip("/").split("/")[-1].replace(".git", "") or "repo"
+    safe_tail = re.sub(r"[^A-Za-z0-9._-]+", "-", tail).strip("-") or "repo"
+    return root / f"{safe_tail}-{token}"
+
+
+def _resolve_repo_source(source: str) -> tuple[str, str] | None:
+    """Resolve a source as (source_id, clone_from)."""
+    if _looks_like_git_url(source):
+        return (source, source)
+
+    path = Path(source).expanduser()
+    if not path.exists():
+        return None
+    resolved = path.resolve()
+    return (resolved.as_uri(), str(resolved))
+
+
+def _ensure_cloned_source(source_id: str, clone_from: str, root: Path) -> Path | None:
+    """Clone or fast-forward update source into *root*, return local directory."""
+    root.mkdir(parents=True, exist_ok=True)
+    dest = _source_repo_dir_for_id(source_id, root)
+    try:
+        if (dest / ".git").exists():
+            subprocess.run(
+                ["git", "-C", str(dest), "pull", "--ff-only"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        else:
+            subprocess.run(
+                ["git", "clone", "--depth", "1", clone_from, str(dest)],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        return dest
+    except Exception as exc:
+        logger.warning("compose: failed to clone/update %s: %s", clone_from, exc)
+        return None
+
+
 def list_compose_files(
     family: str,
     shell_rc_files: list[str] | None = None,
@@ -282,8 +340,23 @@ def list_compose_files(
     result: list[ComposeFile] = []
     seen: set[tuple[str, str]] = set()  # (rc_base, name) to dedupe
 
-    for dir_str in paths:
-        dir_path = Path(dir_str).expanduser().resolve()
+    clone_root = _compose_sources_root(cfg)
+
+    for source in paths:
+        source_str = str(source).strip()
+        if not source_str:
+            continue
+
+        repo_source = _resolve_repo_source(source_str)
+        if repo_source is None:
+            logger.debug("list_compose_files: skipping %r (source not found)", source_str)
+            continue
+        source_id, clone_from = repo_source
+        local = _ensure_cloned_source(source_id, clone_from, clone_root)
+        if local is None:
+            continue
+        dir_path = local.resolve()
+
         if not dir_path.is_dir():
             logger.debug("list_compose_files: skipping %r (not a directory)", dir_path)
             continue
@@ -394,9 +467,9 @@ def install_compose_files(
     selections: list[ComposeFile],
     home_dir: Path | None = None,
 ) -> list[str]:
-    """Copy selected compose files to the home directory.
+    """Symlink selected compose files into the home directory.
 
-    Each file is installed as ~/.{rc_base}-{name}. The registry is
+    Each file is installed as ~/.{rc_base}-{name} symlinked to its source. The registry is
     updated with the source path for each installed file.
 
     Parameters
@@ -419,13 +492,16 @@ def install_compose_files(
     for cf in selections:
         dest = home / cf.dest_basename
         try:
-            shutil.copy2(cf.source_path, dest)
+            if dest.exists() or dest.is_symlink():
+                dest.unlink()
+            dest.symlink_to(Path(cf.source_path))
             installed.append(str(dest))
             reg_by_dest[cf.dest_basename] = {
                 "source_path": cf.source_path,
                 "dest_basename": cf.dest_basename,
                 "rc_base": cf.rc_base,
                 "name": cf.name,
+                "install_mode": "symlink",
             }
         except Exception:
             raise

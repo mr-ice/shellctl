@@ -26,6 +26,14 @@ COMPOSE_TEAM_A_ENV = REPO_ROOT / "repos/compose/teamA/env"
 COMPOSE_TEAM_B_ENV = REPO_ROOT / "repos/compose/teamB/env"
 
 
+def _init_repo(path: Path) -> None:
+    subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True)
+
+
 class TestExtractSummary:
     """Tests for summary extraction from shell init files."""
 
@@ -135,6 +143,7 @@ class TestListComposeFiles:
         (tmp_path / "zshenv-path").write_text("# PATH additions")
         (tmp_path / "other.txt").write_text("ignore")
         (tmp_path / "zshrc-invalid-suffix").write_text("x")
+        _init_repo(tmp_path)
 
         files = list_compose_files(
             "zsh",
@@ -156,6 +165,7 @@ class TestListComposeFiles:
     def test_invalid_summary_sorted_after_valid(self, tmp_path):
         (tmp_path / "zshrc-bad").write_text("source /x\n# ignored\n")
         (tmp_path / "zshrc-good").write_text("# Good one\n")
+        _init_repo(tmp_path)
         files = list_compose_files(
             "zsh",
             paths=[str(tmp_path)],
@@ -170,6 +180,7 @@ class TestListComposeFiles:
     def test_split_compose_by_summary_valid(self, tmp_path):
         (tmp_path / "zshrc-a").write_text("# A\n")
         (tmp_path / "zshrc-b").write_text("b\n")
+        _init_repo(tmp_path)
         files = list_compose_files(
             "zsh",
             paths=[str(tmp_path)],
@@ -184,9 +195,11 @@ class TestListComposeFiles:
         d1 = tmp_path / "dir1"
         d1.mkdir()
         (d1 / "zshrc-foo").write_text("# First")
+        _init_repo(d1)
         d2 = tmp_path / "dir2"
         d2.mkdir()
         (d2 / "zshrc-foo").write_text("# Second")
+        _init_repo(d2)
 
         files = list_compose_files(
             "zsh",
@@ -216,66 +229,13 @@ class TestListComposeFiles:
             shell_rc_files=["zshrc"],
             allow_non_repo=True,
         )
-        assert len(found) == 1 and found[0].name == "plain"
+        assert found == []
 
-    def test_dirty_repo_skipped_without_allow_dirty(self, tmp_path):
+    def test_dirty_local_repo_is_cloned_then_scanned(self, tmp_path):
         repo = tmp_path / "r"
         repo.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
-        subprocess.run(
-            ["git", "config", "user.email", "t@t"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "t"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-        )
         (repo / "zshrc-x").write_text("# x\n")
-        subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
-        subprocess.run(
-            ["git", "commit", "-m", "m"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-        )
-        (repo / "zshrc-x").write_text("# dirty\n")
-        files = list_compose_files(
-            "zsh",
-            paths=[str(repo)],
-            shell_rc_files=["zshrc"],
-            allow_non_repo=False,
-        )
-        assert files == []
-
-    def test_dirty_repo_allowed_with_allow_dirty_env(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("SHELLENV_COMPOSE_ALLOW_DIRTY", "1")
-        repo = tmp_path / "r"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
-        subprocess.run(
-            ["git", "config", "user.email", "t@t"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "t"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-        )
-        (repo / "zshrc-x").write_text("# x\n")
-        subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
-        subprocess.run(
-            ["git", "commit", "-m", "m"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-        )
+        _init_repo(repo)
         (repo / "zshrc-x").write_text("# dirty\n")
         files = list_compose_files(
             "zsh",
@@ -284,6 +244,60 @@ class TestListComposeFiles:
             allow_non_repo=False,
         )
         assert len(files) == 1 and files[0].name == "x"
+
+    def test_dirty_repo_allowed_with_allow_dirty_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SHELLENV_COMPOSE_ALLOW_DIRTY", "1")
+        repo = tmp_path / "r"
+        repo.mkdir()
+        (repo / "zshrc-x").write_text("# x\n")
+        _init_repo(repo)
+        (repo / "zshrc-x").write_text("# dirty\n")
+        files = list_compose_files(
+            "zsh",
+            paths=[str(repo)],
+            shell_rc_files=["zshrc"],
+            allow_non_repo=False,
+        )
+        assert len(files) == 1 and files[0].name == "x"
+
+    def test_git_url_is_cloned_and_scanned(self, tmp_path, monkeypatch):
+        origin = tmp_path / "origin"
+        origin.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=origin, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@t"],
+            cwd=origin,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "t"],
+            cwd=origin,
+            check=True,
+            capture_output=True,
+        )
+        (origin / "zshrc-giturl").write_text("# from url\n")
+        subprocess.run(["git", "add", "."], cwd=origin, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=origin, check=True, capture_output=True)
+
+        user_cfg = tmp_path / ".shellenv.toml"
+        user_cfg.write_text(
+            tomli_w.dumps({"shellenv": {"tool_repo_path": str(tmp_path / ".shellenv")}}),
+            encoding="utf8",
+        )
+        monkeypatch.setattr("shellenv.config.user_config_path", lambda: user_cfg)
+
+        files = list_compose_files(
+            "zsh",
+            paths=[origin.resolve().as_uri()],
+            shell_rc_files=["zshrc"],
+            allow_non_repo=False,
+        )
+
+        assert len(files) == 1
+        assert files[0].name == "giturl"
+        assert Path(files[0].source_path).exists()
+        assert str(tmp_path / ".shellenv" / "compose-sources") in files[0].source_path
 
 
 class TestComposeFixtureRepos:
@@ -377,6 +391,7 @@ class TestInstallComposeFiles:
         assert len(installed) == 1
         dest = home / ".zshrc-fzf"
         assert dest.exists()
+        assert dest.is_symlink()
         assert dest.read_text() == "# FZF\nbindkey"
         assert str(dest) in installed
 
@@ -402,6 +417,7 @@ class TestInstallComposeFiles:
         assert len(reg) == 1
         assert reg[0]["source_path"] == str(src / "zshrc-fzf")
         assert reg[0]["dest_basename"] == ".zshrc-fzf"
+        assert reg[0]["install_mode"] == "symlink"
 
 
 class TestRegistry:

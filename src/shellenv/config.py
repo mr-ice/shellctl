@@ -70,6 +70,12 @@ class ConfigKey:
 
 
 CONFIG_SCHEMA: dict[str, ConfigKey] = {
+    "shellenv.tool_repo_path": ConfigKey(
+        key="shellenv.tool_repo_path",
+        value_type="string",
+        default="~/.shellenv",
+        description="Directory (under home) where the shellenv tool repository is cloned/updated",
+    ),
     "trace.threshold_secs": ConfigKey(
         key="trace.threshold_secs",
         value_type="float_or_null",
@@ -98,7 +104,7 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = {
         key="compose.paths",
         value_type="list_of_strings",
         default=[],
-        description="Directories containing compose shell init files",
+        description="Compose sources: local directories (current) or git URLs (planned); see PROJECT.md",
         merge_strategy="append",
     ),
     "compose.shell_rc_files": ConfigKey(

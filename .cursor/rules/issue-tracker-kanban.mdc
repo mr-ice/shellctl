@@ -13,7 +13,7 @@ Maintain issues in these stages:
 
 - **To Do** — Steps that need to be taken
 - **Ready** — Ready to be done
-- **In Progress** — Currently being worked on
+- **Doing** — Currently being worked on
 - **Done** — Completed
 
 ## Usage
@@ -23,8 +23,12 @@ Maintain issues in these stages:
 - Use self-hosted credentials (API key, web UI credentials) for access.
 - Keep notes in **PROJECT.md** on how to access the tracker (URL, credentials location, quick start).
 
-## Software Selection
+## Chosen software: Vikunja
 
-- Initially, choose software that fits the above requirements.
-- After **more than 3 issue transitions** using that software, ask: "Is this working for you?"
-- If you agree, update this rule to specify the chosen software (name, features, Docker setup) so it can be reproduced for future projects.
+**Vikunja** ([vikunja.io](https://vikunja.io), [code.vikunja.io](https://code.vikunja.io)) is the default issue tracker for this workspace and future projects.
+
+- **Why it fits**: self-hosted, Docker Compose, tasks with **kanban** (buckets), lists, comments, CalDAV, REST API, lightweight compared to full PM suites.
+- **Docker**: use `infra/vikunja/` in this repo (compose + `.env.example`) or follow the [Docker walkthrough](https://vikunja.io/docs/docker-walkthrough/).
+- **Columns**: in each project’s kanban view, use buckets **To Do**, **Ready**, **Doing**, **Done** (Vikunja lets you name buckets freely). See `PROJECT.md` → Issue tracker.
+
+After **more than 3 issue transitions** on a live instance, confirm with the human: “Is this still working for you?” If they want to switch tools, update this section and `PROJECT.md` together.

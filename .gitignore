@@ -1,3 +1,11 @@
+# Cursor rule secrets (API tokens, etc.) — use .env.example patterns elsewhere
+.cursor/rules/.env
+
+# Local Vikunja (see infra/vikunja/.env.example)
+infra/vikunja/.env
+infra/vikunja/db/
+infra/vikunja/files/
+
 __pycache__/
 *.pyc
 dist/
