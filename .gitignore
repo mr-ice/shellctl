@@ -15,3 +15,6 @@ build/
 tcsh-src/
 bash-src/
 shelltree/traces/
+.coverage
+repos
+uv.lock
