@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from shellenv.tui import backup_file, disable_file, resolve_path
+from shellenv.tui import _wrap_for_curses, backup_file, disable_file, resolve_path
 
 
 def test_backup_file_creates_timestamped_copy(tmp_path, monkeypatch):
@@ -44,6 +44,14 @@ def test_disable_file_renames_and_backups(tmp_path, monkeypatch):
     backups = list(backup_dir.glob("*_myrc"))
     assert len(backups) == 1
     assert backups[0].read_text() == "config=1"
+
+
+def test_wrap_for_curses_breaks_long_lines():
+    s = "compose: " + "x" * 40 + " " + "y" * 40
+    lines = _wrap_for_curses(s, width=20)
+    assert all(len(line) <= 20 for line in lines if line)
+    joined = " ".join(lines)
+    assert "xxxx" in joined and "yyyy" in joined
 
 
 def test_resolve_path_absolute_and_relative(tmp_path, monkeypatch):

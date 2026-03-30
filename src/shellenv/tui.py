@@ -21,8 +21,9 @@ from __future__ import annotations
 import curses
 import os
 import shutil
-import sys
 import subprocess
+import sys
+import textwrap
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -572,6 +573,95 @@ def _checklist_nav(ch: int, state: ChecklistState, display_lines: int) -> Checkl
     return state
 
 
+def _wrap_for_curses(text: str, width: int) -> list[str]:
+    """Wrap *text* to at most *width* columns (no ANSI); one paragraph per split line."""
+    if width < 1:
+        return []
+    text = text.replace("\t", " ")
+    out: list[str] = []
+    for para in text.splitlines():
+        if not para.strip():
+            out.append("")
+            continue
+        wrapped = textwrap.wrap(
+            para,
+            width=width,
+            break_long_words=True,
+            break_on_hyphens=True,
+        )
+        out.extend(wrapped if wrapped else [""])
+    return out
+
+
+def _show_wrapped_messages_screen(stdscr, title: str, messages: list[str]) -> None:
+    """Show *messages* word-wrapped to the terminal width; scroll if needed."""
+    h, w = stdscr.getmaxyx()
+    cw = max(1, w - 4)
+    title_lines = _wrap_for_curses(title, cw)
+    body: list[str] = []
+    for msg in messages:
+        body.extend(_wrap_for_curses(msg, cw))
+        body.append("")
+    while body and body[-1] == "":
+        body.pop()
+
+    top = 0
+    while True:
+        stdscr.clear()
+        try:
+            stdscr.border()
+        except curses.error:
+            pass
+        row = 1
+        for tl in title_lines:
+            if row >= h - 2:
+                break
+            try:
+                stdscr.addstr(row, 2, tl[:cw])
+            except curses.error:
+                pass
+            row += 1
+        body_row0 = row + 1
+        if body_row0 >= h - 2:
+            body_row0 = row
+        hint_rows = 2
+        avail = max(1, h - body_row0 - hint_rows)
+        need_scroll = len(body) > avail
+
+        for i in range(avail):
+            idx = top + i
+            if idx >= len(body):
+                break
+            try:
+                stdscr.addstr(body_row0 + i, 2, body[idx][:cw])
+            except curses.error:
+                pass
+
+        if need_scroll:
+            lo = top + 1
+            hi = min(top + avail, len(body))
+            hint = f"↑↓ j/k scroll  q=close  ({lo}-{hi}/{len(body)})"
+        else:
+            hint = "q=close"
+        try:
+            stdscr.addstr(h - 2, 2, hint[:cw])
+        except curses.error:
+            pass
+        stdscr.refresh()
+
+        ch = stdscr.getch()
+        if not need_scroll:
+            if ch in (ord("q"), ord("Q")):
+                return
+            continue
+        if ch in (curses.KEY_DOWN, ord("j")):
+            top = min(max(0, len(body) - avail), top + 1)
+        elif ch in (curses.KEY_UP, ord("k")):
+            top = max(0, top - 1)
+        elif ch in (ord("q"), ord("Q")):
+            return
+
+
 def _draw_checklist(
     stdscr,
     state: ChecklistState,
@@ -579,44 +669,46 @@ def _draw_checklist(
     subtitle: str,
     footer: str,
     extra_lines: list[str] | None = None,
-) -> None:
+) -> int:
     """Render a checkbox list with ``[x]``/``[ ]`` markers.
 
-    Parameters
-    ----------
-    stdscr
-        Curses window.
-    state : ChecklistState
-        Current checklist state.
-    title : str
-        First header line.
-    subtitle : str
-        Second header line (controls hint).
-    footer : str
-        Bottom status bar text.
-    extra_lines : list[str] or None
-        Additional info lines shown between subtitle and the list.
+    Header lines (*title*, *subtitle*, *extra_lines*) and *footer* are
+    word-wrapped to the current width. Returns the number of visible list rows
+    (for :func:`_checklist_nav`).
     """
     stdscr.clear()
     stdscr.border()
     h, w = stdscr.getmaxyx()
-    try:
-        stdscr.addstr(1, 2, title[: w - 4])
-        stdscr.addstr(2, 2, subtitle[: w - 4])
-    except curses.error:
-        pass
+    cw = max(1, w - 4)
 
-    info_y = 4
+    header_chunks: list[str] = []
+    header_chunks.extend(_wrap_for_curses(title, cw))
+    header_chunks.extend(_wrap_for_curses(subtitle, cw))
+    header_chunks.append("")
     if extra_lines:
-        for i, line in enumerate(extra_lines):
-            try:
-                stdscr.addstr(info_y + i, 2, line[: w - 4])
-            except curses.error:
-                pass
-        info_y += len(extra_lines) + 1
+        for ex in extra_lines:
+            header_chunks.extend(_wrap_for_curses(ex, cw))
 
-    header_y = info_y
-    display_lines = h - (header_y + 3)
+    footer_lines = _wrap_for_curses(footer, cw) or [""]
+    footer_h = len(footer_lines)
+    list_end = h - 1 - footer_h
+    max_header = max(0, list_end - 2)
+    if len(header_chunks) > max_header:
+        header_chunks = header_chunks[:max_header]
+
+    row = 1
+    for line in header_chunks:
+        if row >= list_end:
+            break
+        try:
+            stdscr.addstr(row, 2, line[:cw])
+        except curses.error:
+            pass
+        row += 1
+
+    header_y = row
+    display_lines = max(1, list_end - header_y)
+
     for i in range(max(0, display_lines)):
         idx = state.top + i
         y = header_y + i
@@ -625,18 +717,24 @@ def _draw_checklist(
         mark = "[x]" if state.checked[idx] else "[ ]"
         label = state.items[idx]
         line = f"{mark} {label}"
-        line = line[: w - 4]
+        if len(line) > cw:
+            line = line[: max(0, cw - 1)] + "…"
         try:
             attr = curses.A_REVERSE if idx == state.selected else 0
             stdscr.addstr(y, 2, line, attr)
         except curses.error:
             pass
 
-    try:
-        stdscr.addstr(h - 2, 2, footer[: w - 4])
-    except curses.error:
-        pass
+    base_f = h - 1 - footer_h
+    for i, fl in enumerate(footer_lines):
+        if base_f + i >= h - 1:
+            break
+        try:
+            stdscr.addstr(base_f + i, 2, fl[:cw])
+        except curses.error:
+            pass
     stdscr.refresh()
+    return display_lines
 
 
 # ---------------------------------------------------------------------------
@@ -742,58 +840,56 @@ def _draw_backup_checklist(
     subtitle: str,
     footer: str,
     extra_lines: list[str] | None = None,
-) -> None:
+) -> int:
     """Render a grouped checkbox list with family-header separators.
 
     Separator rows are rendered bold without a checkbox.  File rows use
-    the standard ``[x]``/``[ ]`` markers.
-
-    Parameters
-    ----------
-    stdscr
-        Curses window.
-    state : ChecklistState
-        Current checklist state.
-    separators : list[int]
-        Indices in ``state.items`` that are group-header separators.
-    title : str
-        First header line.
-    subtitle : str
-        Second header line (controls hint).
-    footer : str
-        Bottom status bar text.
-    extra_lines : list[str] or None
-        Additional info lines shown between subtitle and the list.
+    the standard ``[x]``/``[ ]`` markers.  Headers and footer are word-wrapped.
+    Returns the number of visible list rows for scrolling.
     """
     sep_set = set(separators)
     stdscr.clear()
     stdscr.border()
     h, w = stdscr.getmaxyx()
-    try:
-        stdscr.addstr(1, 2, title[: w - 4])
-        stdscr.addstr(2, 2, subtitle[: w - 4])
-    except curses.error:
-        pass
+    cw = max(1, w - 4)
 
-    info_y = 4
+    header_chunks: list[str] = []
+    header_chunks.extend(_wrap_for_curses(title, cw))
+    header_chunks.extend(_wrap_for_curses(subtitle, cw))
+    header_chunks.append("")
     if extra_lines:
-        for i, line in enumerate(extra_lines):
-            try:
-                stdscr.addstr(info_y + i, 2, line[: w - 4])
-            except curses.error:
-                pass
-        info_y += len(extra_lines) + 1
+        for ex in extra_lines:
+            header_chunks.extend(_wrap_for_curses(ex, cw))
 
-    header_y = info_y
-    display_lines = h - (header_y + 3)
+    footer_lines = _wrap_for_curses(footer, cw) or [""]
+    footer_h = len(footer_lines)
+    list_end = h - 1 - footer_h
+    max_header = max(0, list_end - 2)
+    if len(header_chunks) > max_header:
+        header_chunks = header_chunks[:max_header]
+
+    row = 1
+    for line in header_chunks:
+        if row >= list_end:
+            break
+        try:
+            stdscr.addstr(row, 2, line[:cw])
+        except curses.error:
+            pass
+        row += 1
+
+    header_y = row
+    display_lines = max(1, list_end - header_y)
+
     for i in range(max(0, display_lines)):
         idx = state.top + i
         y = header_y + i
         if idx >= len(state.items):
             break
         if idx in sep_set:
-            # Group header — bold, no checkbox
-            line = state.items[idx][: w - 4]
+            line = state.items[idx]
+            if len(line) > cw:
+                line = line[: max(0, cw - 1)] + "…"
             try:
                 attr = curses.A_BOLD
                 if idx == state.selected:
@@ -804,18 +900,24 @@ def _draw_backup_checklist(
         else:
             mark = "[x]" if state.checked[idx] else "[ ]"
             line = f"{mark} {state.items[idx]}"
-            line = line[: w - 4]
+            if len(line) > cw:
+                line = line[: max(0, cw - 1)] + "…"
             try:
                 attr = curses.A_REVERSE if idx == state.selected else 0
                 stdscr.addstr(y, 2, line, attr)
             except curses.error:
                 pass
 
-    try:
-        stdscr.addstr(h - 2, 2, footer[: w - 4])
-    except curses.error:
-        pass
+    base_f = h - 1 - footer_h
+    for i, fl in enumerate(footer_lines):
+        if base_f + i >= h - 1:
+            break
+        try:
+            stdscr.addstr(base_f + i, 2, fl[:cw])
+        except curses.error:
+            pass
     stdscr.refresh()
+    return display_lines
 
 
 def display_backup_tui(
@@ -863,6 +965,7 @@ def display_backup_tui(
         if separators and state.selected in sep_set:
             state.selected = min(state.selected + 1, len(labels) - 1)
         status = ""
+        nav_display_lines = [8]
 
         def _draw():
             n_sel = sum(c for i, c in enumerate(state.checked) if i not in sep_set)
@@ -874,7 +977,7 @@ def display_backup_tui(
             ]
             if status:
                 extra.append(status)
-            _draw_backup_checklist(
+            nav_display_lines[0] = _draw_backup_checklist(
                 stdscr,
                 state,
                 separators,
@@ -903,8 +1006,7 @@ def display_backup_tui(
         _draw()
         while True:
             ch = stdscr.getch()
-            h, _ = stdscr.getmaxyx()
-            display_lines = h - 11
+            display_lines = nav_display_lines[0]
 
             if ch in (ord("q"), ord("Q")):
                 break
@@ -1146,6 +1248,7 @@ def display_restore_tui(backup_dir: Path | None = None) -> list[str]:
         )
         force = False
         status = ""
+        nav_display_lines = [8]
 
         def _draw_restore():
             n_sel = sum(state.checked)
@@ -1156,7 +1259,7 @@ def display_restore_tui(backup_dir: Path | None = None) -> list[str]:
             ]
             if status:
                 extra.append(status)
-            _draw_checklist(
+            nav_display_lines[0] = _draw_checklist(
                 stdscr,
                 state,
                 title="shellenv: select files to restore",
@@ -1172,8 +1275,7 @@ def display_restore_tui(backup_dir: Path | None = None) -> list[str]:
                 # go back to archive list — for simplicity, just exit
                 break
 
-            h, _ = stdscr.getmaxyx()
-            display_lines = h - 12
+            display_lines = nav_display_lines[0]
 
             _checklist_nav(ch, state, display_lines)
 
@@ -1215,43 +1317,111 @@ def display_restore_tui(backup_dir: Path | None = None) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _show_compose_parent_rc_warnings(stdscr, messages: list[str]) -> None:
-    """Show multi-line compose parent-rc warnings; wait for a keypress."""
-    stdscr.clear()
-    try:
-        stdscr.border()
-    except curses.error:
-        pass
+def _show_parent_rc_warning_screen(stdscr, detail: Any) -> None:
+    """Show one parent-rc warning; ``q`` skips, ``a`` appends the stanza to *detail.path*."""
+    from .compose import append_parent_rc_stanza
+
     h, w = stdscr.getmaxyx()
-    row = 2
-    title = "Compose: parent rc may not load fragments"
-    try:
-        stdscr.addstr(1, 2, title[: max(0, w - 4)])
-    except curses.error:
-        pass
-    for msg in messages:
-        for line in msg.splitlines():
-            if row >= h - 3:
-                try:
-                    stdscr.addstr(h - 3, 2, "… (truncated; full text on stderr)")
-                except curses.error:
-                    pass
-                row = h - 2
+    cw = max(1, w - 4)
+    title_lines = _wrap_for_curses("Compose: parent rc may not load fragments", cw)
+    body: list[str] = []
+    body.extend(_wrap_for_curses(detail.body, cw))
+    body.append("")
+    body.extend(
+        _wrap_for_curses(
+            f"Example ({detail.shell_hint}) — 'a' appends this block to {detail.path}:",
+            cw,
+        )
+    )
+    for sl in detail.stanza.strip().splitlines():
+        disp = f"  {sl}" if sl.strip() else sl
+        if len(disp) <= cw:
+            body.append(disp)
+        else:
+            body.extend(textwrap.wrap(disp, width=cw, break_long_words=True))
+
+    feedback = ""
+    top = 0
+    while True:
+        stdscr.clear()
+        try:
+            stdscr.border()
+        except curses.error:
+            pass
+        row = 1
+        for tl in title_lines:
+            if row >= h - 2:
                 break
             try:
-                stdscr.addstr(row, 2, line[: max(0, w - 4)])
+                stdscr.addstr(row, 2, tl[:cw])
             except curses.error:
                 pass
             row += 1
-        row += 1
-        if row >= h - 3:
-            break
-    try:
-        stdscr.addstr(h - 2, 2, "Press any key to continue")
-    except curses.error:
-        pass
-    stdscr.refresh()
-    stdscr.getch()
+        body_row0 = row + 1
+        if body_row0 >= h - 2:
+            body_row0 = row
+        reserve = 3 if feedback else 2
+        avail = max(1, h - body_row0 - reserve)
+        need_scroll = len(body) > avail and not feedback
+
+        for i in range(avail):
+            idx = top + i
+            if idx >= len(body):
+                break
+            try:
+                stdscr.addstr(body_row0 + i, 2, body[idx][:cw])
+            except curses.error:
+                pass
+
+        if feedback:
+            try:
+                stdscr.addstr(h - 3, 2, feedback[:cw])
+            except curses.error:
+                pass
+
+        if feedback:
+            hint = "q=continue"
+        elif need_scroll:
+            lo = top + 1
+            hi = min(top + avail, len(body))
+            hint = f"↑↓ j/k  q=skip  a=append  ({lo}-{hi}/{len(body)})"
+        else:
+            hint = "q=skip (no change)  a=append stanza to file"
+
+        try:
+            stdscr.addstr(h - 2, 2, hint[:cw])
+        except curses.error:
+            pass
+        stdscr.refresh()
+
+        ch = stdscr.getch()
+        if feedback:
+            if ch in (ord("q"), ord("Q")):
+                return
+            continue
+        if need_scroll:
+            if ch in (curses.KEY_DOWN, ord("j")):
+                top = min(max(0, len(body) - avail), top + 1)
+                continue
+            if ch in (curses.KEY_UP, ord("k")):
+                top = max(0, top - 1)
+                continue
+        if ch in (ord("q"), ord("Q")):
+            return
+        if ch in (ord("a"), ord("A")):
+            try:
+                append_parent_rc_stanza(detail.path, detail.stanza)
+                feedback = "Stanza appended."
+            except OSError as exc:
+                feedback = f"Error: {exc}"
+            top = 0
+            continue
+
+
+def _show_compose_parent_rc_warnings(stdscr, details: list[Any]) -> None:
+    """Show parent-rc warnings one at a time (``q`` / ``a`` per :func:`_show_parent_rc_warning_screen`)."""
+    for d in details:
+        _show_parent_rc_warning_screen(stdscr, d)
 
 
 def display_compose_pick_tui(family: str) -> list[str]:
@@ -1270,13 +1440,19 @@ def display_compose_pick_tui(family: str) -> list[str]:
     list[str]
         Absolute paths of installed files (empty if cancelled).
     """
-    from .compose import compose_parent_rc_warnings, install_compose_files, list_compose_files
+    from .compose import compose_parent_rc_warning_details, install_compose_files, list_compose_files
 
     path_warnings: list[str] = []
     files = list_compose_files(family, path_kind_warnings=path_warnings)
     for msg in path_warnings:
         print(msg, file=sys.stderr)
     if not files:
+        if path_warnings:
+
+            def _policy_only(stdscr):
+                _show_wrapped_messages_screen(stdscr, "Compose policy", path_warnings)
+
+            curses.wrapper(_policy_only)
         return []
 
     # Valid entries first (list_compose_files order); mark invalid for visibility
@@ -1295,7 +1471,10 @@ def display_compose_pick_tui(family: str) -> list[str]:
     def _wrapper(stdscr):
         nonlocal installed
         curses.curs_set(0)
+        if path_warnings:
+            _show_wrapped_messages_screen(stdscr, "Compose policy", path_warnings)
         status = ""
+        nav_display_lines = [8]
 
         def _draw():
             n_sel = sum(state.checked)
@@ -1304,7 +1483,7 @@ def display_compose_pick_tui(family: str) -> list[str]:
             ]
             if status:
                 extra.append(status)
-            _draw_checklist(
+            nav_display_lines[0] = _draw_checklist(
                 stdscr,
                 state,
                 title="shellenv: select compose files to install",
@@ -1314,11 +1493,20 @@ def display_compose_pick_tui(family: str) -> list[str]:
             )
 
         def _confirm(prompt: str) -> bool:
+            _, w = stdscr.getmaxyx()
+            cw = max(1, w - 4)
+            plines = _wrap_for_curses(prompt, cw)
             stdscr.clear()
             stdscr.border()
+            row = 2
+            for ln in plines:
+                try:
+                    stdscr.addstr(row, 2, ln[:cw])
+                except curses.error:
+                    pass
+                row += 1
             try:
-                stdscr.addstr(2, 2, prompt)
-                stdscr.addstr(4, 2, "y=yes  n=no")
+                stdscr.addstr(row + 1, 2, "y=yes  n=no")
             except curses.error:
                 pass
             stdscr.refresh()
@@ -1332,8 +1520,7 @@ def display_compose_pick_tui(family: str) -> list[str]:
         _draw()
         while True:
             ch = stdscr.getch()
-            h, w = stdscr.getmaxyx()
-            display_lines = h - 10
+            display_lines = nav_display_lines[0]
 
             _checklist_nav(ch, state, display_lines)
 
@@ -1351,11 +1538,13 @@ def display_compose_pick_tui(family: str) -> list[str]:
                     try:
                         installed = install_compose_files(selected_files)
                         status = f"Installed {len(installed)} file(s)"
-                        warns = compose_parent_rc_warnings(selected_files, family=family)
-                        for w in warns:
-                            print(w, file=sys.stderr)
-                        if warns:
-                            _show_compose_parent_rc_warnings(stdscr, warns)
+                        prc_details = compose_parent_rc_warning_details(
+                            selected_files, family=family
+                        )
+                        for d in prc_details:
+                            print(d.as_message(), file=sys.stderr)
+                        if prc_details:
+                            _show_compose_parent_rc_warnings(stdscr, prc_details)
                     except Exception as exc:
                         status = f"Error: {exc}"
                     _draw()

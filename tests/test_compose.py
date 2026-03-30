@@ -15,6 +15,8 @@ from shellenv.compose import (
     _parse_compose_summary,
     _registry_path,
     _shell_rc_files_for_family,
+    append_parent_rc_stanza,
+    compose_parent_rc_warning_details,
     compose_parent_rc_warnings,
     get_registry,
     install_compose_files,
@@ -340,6 +342,52 @@ class TestListComposeFiles:
         assert Path(files[0].source_path).exists()
         assert str(tmp_path / ".shellenv" / "compose-sources") in files[0].source_path
 
+    def test_bare_repo_path_is_cloned_and_scanned(self, tmp_path, monkeypatch):
+        work = tmp_path / "work"
+        work.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=work, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@t"],
+            cwd=work,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "t"],
+            cwd=work,
+            check=True,
+            capture_output=True,
+        )
+        (work / "zshrc-barepath").write_text("# from bare\n")
+        subprocess.run(["git", "add", "."], cwd=work, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=work, check=True, capture_output=True)
+
+        bare = tmp_path / "bare.git"
+        subprocess.run(
+            ["git", "clone", "--bare", str(work), str(bare)],
+            check=True,
+            capture_output=True,
+        )
+
+        user_cfg = tmp_path / ".shellenv.toml"
+        user_cfg.write_text(
+            tomli_w.dumps({"shellenv": {"tool_repo_path": str(tmp_path / ".shellenv")}}),
+            encoding="utf8",
+        )
+        monkeypatch.setattr("shellenv.config.user_config_path", lambda: user_cfg)
+
+        files = list_compose_files(
+            "zsh",
+            paths=[str(bare.resolve())],
+            shell_rc_files=["zshrc"],
+            allow_dirty_or_off_main=False,
+        )
+
+        assert len(files) == 1
+        assert files[0].name == "barepath"
+        assert Path(files[0].source_path).exists()
+        assert str(tmp_path / ".shellenv" / "compose-sources") in files[0].source_path
+
 
 class TestComposeFixtureRepos:
     """Integration checks against repos/compose/* sample trees."""
@@ -522,6 +570,42 @@ class TestComposeAllowedPathKinds:
         assert files == []
         assert w and ("REPO" in w[0] or "repo" in w[0].lower())
 
+    def test_bare_repo_skipped_when_only_directory_allowed(self, tmp_path, monkeypatch):
+        work = tmp_path / "work"
+        work.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=work, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@t"],
+            cwd=work,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "t"],
+            cwd=work,
+            check=True,
+            capture_output=True,
+        )
+        (work / "zshrc-x").write_text("# x\n")
+        subprocess.run(["git", "add", "."], cwd=work, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "i"], cwd=work, check=True, capture_output=True)
+        bare = tmp_path / "bare.git"
+        subprocess.run(
+            ["git", "clone", "--bare", str(work), str(bare)],
+            check=True,
+            capture_output=True,
+        )
+        self._patch_merged_config(
+            monkeypatch,
+            tmp_path,
+            [str(bare.resolve())],
+            allowed_path_kinds=["directory"],
+        )
+        w: list[str] = []
+        files = list_compose_files("zsh", shell_rc_files=["zshrc"], path_kind_warnings=w)
+        assert files == []
+        assert w and ("REPO" in w[0] or "repo" in w[0].lower())
+
     def test_plain_directory_skipped_when_only_repo_allowed(self, tmp_path, monkeypatch):
         plain = tmp_path / "plain"
         plain.mkdir()
@@ -612,6 +696,36 @@ class TestComposeParentRcWarnings:
             family="zsh",
         )
         assert len(msgs) == 1
+
+    def test_details_as_message_matches_warnings(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".zshrc").write_text("# bare\n")
+        cfs = [self._cf("zshrc", "x")]
+        msgs = compose_parent_rc_warnings(cfs, home_dir=home, family="zsh")
+        details = compose_parent_rc_warning_details(cfs, home_dir=home, family="zsh")
+        assert [d.as_message() for d in details] == msgs
+
+
+class TestAppendParentRcStanza:
+    def test_creates_missing_file(self, tmp_path):
+        p = tmp_path / ".zshrc"
+        stanza = "for _rc in $HOME/.zshrc-*; do\n  true\n  done"
+        append_parent_rc_stanza(p, stanza)
+        t = p.read_text(encoding="utf-8")
+        assert "# shellenv compose: source ~/.zshrc-* fragment files" in t
+        assert "for _rc in $HOME/.zshrc-*" in t
+        assert t.index("# shellenv compose") < t.index("for _rc")
+
+    def test_appends_after_existing_content(self, tmp_path):
+        p = tmp_path / ".zshrc"
+        p.write_text("export A=1", encoding="utf-8")
+        append_parent_rc_stanza(p, "loop_line")
+        t = p.read_text(encoding="utf-8")
+        assert "export A=1" in t
+        assert "# shellenv compose" in t
+        assert "loop_line" in t
+        assert t.index("export A=1") < t.index("# shellenv compose")
 
 
 class TestRegistry:

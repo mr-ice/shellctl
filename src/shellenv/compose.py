@@ -18,6 +18,10 @@ get_registry()
 compose_parent_rc_warnings(selections, home_dir, family)
     After install, return human-readable warnings if parent rc files do not
     appear to source ``~/.{rc_base}-*`` fragments (PROJECT.md).
+compose_parent_rc_warning_details(selections, home_dir, family)
+    Same checks as above; returns :class:`ParentRcWarningDetail` records for TUI.
+append_parent_rc_stanza(path, stanza)
+    Append a fragment-sourcing stanza to a parent rc file (create if missing).
 
 Environment (testing)
 ---------------------
@@ -88,6 +92,20 @@ class ComposeFile:
     dest_basename: str
     summary: str
     summary_valid: bool = True
+
+
+@dataclass(frozen=True)
+class ParentRcWarningDetail:
+    """Structured parent-rc compose warning (path, prose, stanza to optionally append)."""
+
+    path: Path
+    body: str
+    stanza: str
+    shell_hint: str
+
+    def as_message(self) -> str:
+        """Same text as :func:`compose_parent_rc_warnings` entries (CLI / stderr)."""
+        return f"{self.body}\nExample ({self.shell_hint}):\n{self.stanza}"
 
 
 def _parse_compose_summary(path: Path) -> tuple[str, bool]:
@@ -367,6 +385,29 @@ def _is_git_worktree_dir(dir_path: Path) -> bool:
         return False
 
 
+def _is_bare_git_repository(dir_path: Path) -> bool:
+    """Return True if *dir_path* is a bare git repository (object database only, no worktree).
+
+    Bare repos have no ``.git`` subdirectory; the directory itself holds ``HEAD``,
+    ``refs/``, ``objects/``, etc. They are classified as **repo** so compose clones
+    a normal worktree under ``compose-sources`` like a remote URL.
+    """
+    if not dir_path.is_dir():
+        return False
+    if (dir_path / ".git").exists():
+        return False
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(dir_path), "rev-parse", "--is-bare-repository"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return r.returncode == 0 and "true" in r.stdout.strip().lower()
+    except Exception:
+        return False
+
+
 def _classify_compose_path_element(source_str: str) -> tuple[str | None, str | None]:
     """Classify a compose.paths entry as ``repo`` or ``directory``.
 
@@ -384,6 +425,8 @@ def _classify_compose_path_element(source_str: str) -> tuple[str | None, str | N
     if not resolved.is_dir():
         return (None, f"not a directory: {source_str!r}")
     if _is_git_worktree_dir(resolved):
+        return ("repo", None)
+    if _is_bare_git_repository(resolved):
         return ("repo", None)
     return ("directory", None)
 
@@ -612,30 +655,30 @@ def _parent_rc_sources_fragments(content: str, rc_base: str) -> bool:
 
 
 def _example_parent_rc_loop(rc_base: str, family: str) -> str:
-    """Return a short example stanza for sourcing compose fragments."""
+    """Return a short stanza for sourcing compose fragments (no leading indent; for rc files)."""
     fam = family.lower()
     if fam == "tcsh":
         return (
-            f"  foreach _rc ($HOME/.{rc_base}-*)\n"
-            f'      if (-f "$_rc") source "$_rc"\n'
-            f"  end"
+            f"foreach _rc ($HOME/.{rc_base}-*)\n"
+            f'    if (-f "$_rc") source "$_rc"\n'
+            "end"
         )
     return (
-        f"  for _rc in $HOME/.{rc_base}-*; do\n"
-        f'      [ -f "$_rc" ] && . "$_rc"\n'
-        f"  done"
+        f"for _rc in $HOME/.{rc_base}-*; do\n"
+        f'  [ -f "$_rc" ] && . "$_rc"\n'
+        "done"
     )
 
 
-def compose_parent_rc_warnings(
+def compose_parent_rc_warning_details(
     selections: list[ComposeFile],
     home_dir: Path | None = None,
     *,
     family: str = "zsh",
-) -> list[str]:
+) -> list[ParentRcWarningDetail]:
     """Check parent rc files for compose fragment sourcing loops (PROJECT.md).
 
-    Emits at most one message per distinct ``rc_base`` among *selections*.
+    Returns at most one record per distinct ``rc_base`` among *selections*.
     """
     if not selections:
         return []
@@ -643,7 +686,7 @@ def compose_parent_rc_warnings(
     home = home_dir or Path.home()
     fam = family.lower()
     warned_rc: set[str] = set()
-    out: list[str] = []
+    out: list[ParentRcWarningDetail] = []
 
     for cf in selections:
         rc = cf.rc_base
@@ -657,10 +700,16 @@ def compose_parent_rc_warnings(
 
         if not parent.exists():
             out.append(
-                f"warning: parent startup file {parent} does not exist. "
-                f"Compose installed fragments like ~/{cf.dest_basename}; "
-                f"create {parent} and add a loop so the shell loads ~/.{rc}-* files.\n"
-                f"Example ({shell_hint}):\n{example}"
+                ParentRcWarningDetail(
+                    path=parent,
+                    body=(
+                        f"warning: parent startup file {parent} does not exist. "
+                        f"Compose installed fragments like ~/{cf.dest_basename}; "
+                        f"create {parent} and add a loop so the shell loads ~/.{rc}-* files."
+                    ),
+                    stanza=example,
+                    shell_hint=shell_hint,
+                )
             )
             continue
 
@@ -668,9 +717,15 @@ def compose_parent_rc_warnings(
             text = parent.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             out.append(
-                f"warning: could not read {parent}: {exc}. "
-                f"Verify it sources ~/.{rc}-* compose fragments.\n"
-                f"Example ({shell_hint}):\n{example}"
+                ParentRcWarningDetail(
+                    path=parent,
+                    body=(
+                        f"warning: could not read {parent}: {exc}. "
+                        f"Verify it sources ~/.{rc}-* compose fragments."
+                    ),
+                    stanza=example,
+                    shell_hint=shell_hint,
+                )
             )
             continue
 
@@ -678,12 +733,59 @@ def compose_parent_rc_warnings(
             continue
 
         out.append(
-            f"warning: {parent} does not appear to source ~/.{rc}-* compose fragments. "
-            f"Files like ~/{cf.dest_basename} may never load unless you add a loop.\n"
-            f"Example ({shell_hint}):\n{example}"
+            ParentRcWarningDetail(
+                path=parent,
+                body=(
+                    f"warning: {parent} does not appear to source ~/.{rc}-* compose fragments. "
+                    f"Files like ~/{cf.dest_basename} may never load unless you add a loop."
+                ),
+                stanza=example,
+                shell_hint=shell_hint,
+            )
         )
 
     return out
+
+
+def append_parent_rc_stanza(path: Path, stanza: str) -> None:
+    """Append *stanza* to *path*, creating the file (and parents) if needed.
+
+    Prepends a ``# shellenv compose`` comment and adds a leading blank line when
+    the file already has content, so the block is separated from existing text.
+
+    Raises
+    ------
+    OSError
+        If the file cannot be read or written.
+    """
+    name = path.name
+    rc_base = name[1:] if name.startswith(".") else name
+    banner = f"# shellenv compose: source ~/.{rc_base}-* fragment files\n"
+    block = banner + stanza.rstrip("\n") + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        cur = path.read_text(encoding="utf-8", errors="replace")
+        if cur:
+            if not cur.endswith("\n"):
+                cur += "\n"
+            cur += "\n"
+        cur += block
+        path.write_text(cur, encoding="utf-8", newline="\n")
+    else:
+        path.write_text(block, encoding="utf-8", newline="\n")
+
+
+def compose_parent_rc_warnings(
+    selections: list[ComposeFile],
+    home_dir: Path | None = None,
+    *,
+    family: str = "zsh",
+) -> list[str]:
+    """Check parent rc files for compose fragment sourcing loops (PROJECT.md).
+
+    Emits at most one message per distinct ``rc_base`` among *selections*.
+    """
+    return [d.as_message() for d in compose_parent_rc_warning_details(selections, home_dir, family=family)]
 
 
 def split_compose_by_summary_valid(

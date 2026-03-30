@@ -104,7 +104,7 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = {
         key="compose.paths",
         value_type="list_of_strings",
         default=[],
-        description="Compose sources: git URLs, local git repos, or plain directories; see PROJECT.md",
+        description="Compose sources: git URLs, local git repos (including bare), or plain directories; see PROJECT.md",
         merge_strategy="append",
     ),
     "compose.allowed_path_kinds": ConfigKey(
