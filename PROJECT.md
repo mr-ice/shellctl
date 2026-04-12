@@ -14,7 +14,9 @@ This document is the product spec. For day-to-day CLI usage and developer comman
 - **Site template**: `config/shellenv.global.defaults.toml` in the repo is a full commented template (regenerate with `shellenv config init-global --path …`).
 - **Override global path (installs, CI, pytest)**: set **`SHELLENV_GLOBAL_CONFIG_PATH`** to another file instead of `/etc/shellenv.toml`.
 
-Relevant schema keys include `trace.*`, `repo.*`, `compose.*` (including **`compose.allowed_path_kinds`**), and **`shellenv.tool_repo_path`** (clone location for this tool’s own repo, default `~/.shellenv`). See `src/shellenv/config.py` (`CONFIG_SCHEMA`).
+Relevant schema keys include `trace.*`, `discover.cache_ttl_secs` (discovery result cache max age; default one week), `repo.*`, `compose.*` (including **`compose.allowed_path_kinds`**), and **`shellenv.tool_repo_path`** (clone location for this tool’s own repo, default `~/.shellenv`). For init repo workflow, `repo.destination` defaults to `~/.shellenv/env-source/`. See `src/shellenv/config.py` (`CONFIG_SCHEMA`).
+
+Discovery cache behavior: **`shellenv discover`** and **`shellenv trace`** always re-run tracing and refresh the per-mode cache. Commands such as **`backup`** / **`archive`** reuse cached results while they are still within the TTL; **`--refresh-cache`** forces a fresh trace. Env override: **`SHELLENV_DISCOVER_CACHE_TTL_SECS`**.
 
 ## Compose (feature summary)
 

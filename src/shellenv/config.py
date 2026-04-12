@@ -1,3 +1,9 @@
+
+
+
+
+
+
 """Configuration helpers for shellenv (global and user).
 
 This module provides loading and saving of a global config (system-wide)
@@ -88,6 +94,16 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = {
         default=None,
         description="Flag files taking longer than N% of total",
     ),
+    "discover.cache_ttl_secs": ConfigKey(
+        key="discover.cache_ttl_secs",
+        value_type="int",
+        default=604800,
+        description=(
+            "Discovery cache lifetime in seconds (default 604800 = 7 days). "
+            "Override with SHELLENV_DISCOVER_CACHE_TTL_SECS. "
+            "shellenv discover/trace always refresh the cache; backup uses cache unless stale or --refresh-cache."
+        ),
+    ),
     "repo.url": ConfigKey(
         key="repo.url",
         value_type="string_or_null",
@@ -97,7 +113,7 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = {
     "repo.destination": ConfigKey(
         key="repo.destination",
         value_type="string_or_null",
-        default=None,
+        default="~/.shellenv/env-source/",
         description="Local path to clone repo into",
     ),
     "repo.branch": ConfigKey(

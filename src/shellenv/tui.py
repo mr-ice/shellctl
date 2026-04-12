@@ -2,6 +2,9 @@
 
 Public Functions
 ----------------
+display_main_tui(family, modes_data)
+    Two-panel home screen: file browser + action menu.  Main entry point for
+    ``shellenv tui``.
 display_trace_tui(analysis)
     Show trace analysis in a scrollable curses view.
 display_discovery_tui(modes)
@@ -247,9 +250,400 @@ def display_trace_tui(analysis: dict[str, Any]) -> None:
     curses.wrapper(_wrapper)
 
 
+# ---------------------------------------------------------------------------
+# Main TUI home screen
+# ---------------------------------------------------------------------------
+
+# (key-char, label) pairs for the action sidebar, in display order.
+# Note: keys that conflict with vi navigation (j=down, k=up) must be pressed
+# in uppercase when used as global shortcuts from the files panel.
+_ACTIONS: list[tuple[str, str]] = [
+    ("b", "Backup"),
+    ("a", "Archive"),
+    ("r", "Restore"),
+    ("c", "Compose"),
+    ("i", "Init"),
+    ("t", "Discover"),
+    ("f", "Refresh"),
+    ("k", "Config"),
+    ("q", "Quit"),
+]
+
+# curses color-pair indices used by display_main_tui
+_CP_GREEN = 1
+_CP_CYAN = 2
+_CP_YELLOW = 3
+_CP_INV = 4
+
+
+def display_main_tui(
+    family: str,
+    modes_data: dict[str, list[str]],
+    *,
+    cache_age_secs: float | None = None,
+    warnings: list[str] | None = None,
+) -> None:
+    """Display the shellenv main TUI home screen.
+
+    Two-panel layout: a file browser organised by invocation mode on the left
+    and an action menu on the right.  Dispatches to specialist TUI screens
+    (backup, restore, compose, discover, config) when the user activates an
+    action.  Refresh re-runs discovery in-place and updates the file browser.
+
+    Parameters
+    ----------
+    family : str
+        Detected shell family (``bash``, ``zsh``, ``tcsh``).
+    modes_data : dict[str, list[str]]
+        Mapping from invocation-mode name to list of discovered startup-file
+        absolute paths.  Typically from :func:`discover_startup_files_modes`.
+    cache_age_secs : float, optional
+        Age of the discovery cache in seconds, displayed in the status bar.
+    warnings : list[str], optional
+        Warning strings shown in the status bar (first entry shown).
+    """
+
+    def _wrapper(stdscr) -> None:  # noqa: PLR0912,PLR0915
+        curses.curs_set(0)
+        has_col = curses.has_colors()
+        if has_col:
+            curses.start_color()
+            curses.use_default_colors()
+            curses.init_pair(_CP_GREEN, curses.COLOR_GREEN, -1)
+            curses.init_pair(_CP_CYAN, curses.COLOR_CYAN, -1)
+            curses.init_pair(_CP_YELLOW, curses.COLOR_YELLOW, -1)
+            curses.init_pair(_CP_INV, curses.COLOR_BLACK, curses.COLOR_WHITE)
+
+        # All mutable state lives here so closures can update it freely.
+        st: dict[str, Any] = {
+            "modes": dict(modes_data),              # live copy — updated by Refresh
+            "files": list(dict.fromkeys(            # deduplicated union of all mode files
+                f for flist in modes_data.values() for f in flist
+            )),
+            "cache_age": cache_age_secs,            # updated to 0 after Refresh
+            "expanded": {m: (i == 0) for i, m in enumerate(modes_data)},
+            "panel": 0,       # 0 = file browser, 1 = action menu
+            "cursor": 0,      # flat-row index in file browser
+            "scroll": 0,      # scroll offset for file browser
+            "action": 0,      # selected index in action menu
+            "dl": 0,          # display_lines set by _draw
+        }
+
+        def _flat() -> list[tuple[str, str, str | None]]:
+            """Generate visible flat rows: (kind, mode, path_or_None)."""
+            out: list[tuple[str, str, str | None]] = []
+            for mode, files in st["modes"].items():
+                out.append(("group", mode, None))
+                if st["expanded"].get(mode, False):
+                    for f in files:
+                        out.append(("file", mode, f))
+            return out
+
+        def _a(cp: int) -> int:
+            return curses.color_pair(cp) if has_col else 0
+
+        def _s(y: int, x: int, text: str, attr: int = 0) -> None:
+            try:
+                stdscr.addstr(y, x, text, attr)
+            except curses.error:
+                pass
+
+        def _restore_curses() -> None:
+            """Re-apply curses settings after a nested wrapper has torn them down."""
+            curses.noecho()
+            curses.cbreak()
+            stdscr.keypad(True)
+            curses.curs_set(0)
+            stdscr.refresh()
+
+        def _draw() -> None:
+            """Render the full home screen; updates ``st['dl']``."""
+            stdscr.clear()
+            h, w = stdscr.getmaxyx()
+            if h < 8 or w < 30:
+                _s(0, 0, "Terminal too small (need ≥30×8)")
+                stdscr.refresh()
+                st["dl"] = 0
+                return
+
+            # Column layout
+            rw = min(17, max(10, w // 5))   # right-panel inner width
+            lw = w - rw - 3                  # left-panel inner width
+            dc = lw + 1                      # centre divider column
+            rs = lw + 2                      # right-panel content start column
+
+            # Row layout:
+            # 0=header  1=box-top  2=titles  3=box-divider
+            # 4..bb-1=content  bb=box-bottom
+            # bb+1=separator  bb+2=status  bb+3=hints
+            bb = h - 5
+            cs = 4                           # content start row
+            dl = max(0, bb - cs)             # display lines
+            st["dl"] = dl
+            sep_r = bb + 1
+            stat_r = bb + 2
+            hint_r = bb + 3
+
+            # Header (row 0) — inverted, bold
+            right_hdr = f" shell: {family}  family: {family} "
+            left_hdr = " shellenv v0.1"
+            hdr = (left_hdr + " " * max(0, w - len(left_hdr) - len(right_hdr)) + right_hdr)[:w]
+            ha = _a(_CP_INV) | curses.A_BOLD if has_col else curses.A_REVERSE | curses.A_BOLD
+            _s(0, 0, hdr, ha)
+
+            # Box top border (row 1)
+            _s(1, 0, "┌" + "─" * lw + "┬" + "─" * rw + "┐")
+
+            # Panel titles (row 2)
+            ta = _a(_CP_CYAN) | curses.A_BOLD if has_col else curses.A_BOLD
+            _s(2, 0, "│")
+            _s(2, 1, " Startup Files"[:lw].ljust(lw), ta)
+            _s(2, dc, "│")
+            _s(2, rs, " Actions"[:rw].ljust(rw), ta)
+            _s(2, w - 1, "│")
+
+            # Box divider (row 3)
+            _s(3, 0, "├" + "─" * lw + "┼" + "─" * rw + "┤")
+
+            # Content rows
+            rows = _flat()
+            home = str(Path.home())
+            for i in range(dl):
+                y = cs + i
+                ri = st["scroll"] + i
+
+                _s(y, 0, "│")  # outer left border
+
+                # Left panel
+                if ri < len(rows):
+                    kind, mode, path = rows[ri]
+                    sel = st["panel"] == 0 and ri == st["cursor"]
+                    if kind == "group":
+                        tri = "▼" if st["expanded"].get(mode, False) else "▶"
+                        txt = f" {tri} {mode}"[:lw].ljust(lw)
+                        _s(y, 1, txt, curses.A_REVERSE if sel else curses.A_BOLD)
+                    else:
+                        bn = os.path.basename(path or "")
+                        tp = (path or "").replace(home, "~")
+                        bw = min(14, max(6, lw // 4))
+                        pw = max(0, lw - bw - 5)
+                        txt = f"   {bn[:bw].ljust(bw)}  {tp[:pw]}"[:lw].ljust(lw)
+                        _s(y, 1, txt, curses.A_REVERSE if sel else 0)
+                else:
+                    _s(y, 1, " " * lw)
+
+                _s(y, dc, "│")  # centre divider
+
+                # Right panel — action menu
+                if i < len(_ACTIONS):
+                    key, lbl = _ACTIONS[i]
+                    asel = st["panel"] == 1 and i == st["action"]
+                    key_part = f"  [{key.upper()}]"
+                    full = f"{key_part} {lbl}"
+                    if asel:
+                        _s(y, rs, full[:rw].ljust(rw), curses.A_REVERSE)
+                    else:
+                        rest_w = max(0, rw - len(key_part))
+                        _s(y, rs, key_part, _a(_CP_CYAN) if has_col else 0)
+                        _s(y, rs + len(key_part), f" {lbl}"[:rest_w].ljust(rest_w))
+                else:
+                    _s(y, rs, " " * rw)
+
+                _s(y, w - 1, "│")  # outer right border
+
+            # Box bottom border
+            _s(bb, 0, "└" + "─" * lw + "┴" + "─" * rw + "┘")
+
+            # Separator line
+            _s(sep_r, 0, "─" * max(0, w - 1))
+
+            # Status bar
+            total_f = len(st["files"])
+            cage = st["cache_age"]
+            if cage is None:
+                clabel, ca = "Cache: unknown", 0
+            elif cage < 300:
+                m, s = divmod(int(cage), 60)
+                age = f"{m}m{s}s" if m else f"{s}s"
+                clabel, ca = f"Cache: fresh ({age} ago)", _a(_CP_GREEN) if has_col else 0
+            else:
+                hrs, rem = divmod(int(cage), 3600)
+                mins = rem // 60
+                age = f"{hrs}h{mins}m" if hrs else f"{mins}m"
+                clabel, ca = f"Cache: stale ({age} ago)", _a(_CP_YELLOW) if has_col else 0
+            flabel = f"{total_f} file(s) discovered"
+            wlist = warnings or []
+            wstr = f"[WARN] {wlist[0]}" if wlist else ""
+
+            _s(stat_r, 1, clabel, ca)
+            fc = max(len(clabel) + 3, w // 2 - len(flabel) // 2)
+            _s(stat_r, fc, flabel, curses.A_BOLD)
+            if wstr and fc + len(flabel) + 2 + len(wstr) < w - 1:
+                warn_a = _a(_CP_YELLOW) | curses.A_BOLD if has_col else 0
+                _s(stat_r, w - len(wstr) - 1, wstr, warn_a)
+
+            # Hint bar — Q is in the action menu so omit it here
+            pname = "files" if st["panel"] == 0 else "actions"
+            hint = f" ↑↓ navigate  Enter select  Tab switch panel ({pname} active)"
+            _s(hint_r, 0, hint[:w - 1], curses.A_DIM if has_col else 0)
+
+            stdscr.refresh()
+
+        def _activate(idx: int) -> bool:
+            """Run the action at *idx*; return False when user chose Quit.
+
+            Sub-TUI screens are launched by temporarily suspending curses
+            (``endwin``), running the sub-screen (which has its own
+            ``curses.wrapper`` session), then restoring our curses settings
+            via :func:`_restore_curses` before redrawing.
+            """
+            _, lbl = _ACTIONS[idx]
+            name = lbl.lower()
+            if name == "quit":
+                return False
+
+            if name == "refresh":
+                _do_refresh()
+                return True
+
+            # All other actions need a full-screen TUI — suspend ours first.
+            curses.endwin()
+            try:
+                if name == "backup":
+                    display_backup_tui([(family, st["files"])], family, archive_mode=False)
+                elif name == "archive":
+                    display_backup_tui([(family, st["files"])], family, archive_mode=True)
+                elif name == "restore":
+                    display_restore_tui()
+                elif name == "compose":
+                    display_compose_pick_tui(family)
+                elif name == "init":
+                    _do_init()
+                elif name == "discover":
+                    display_discovery_tui(st["modes"])
+                elif name == "config":
+                    display_config_tui()
+            except Exception as exc:
+                print(f"\nError in {lbl}: {exc}", file=sys.stderr)
+                input("Press Enter to return to the main menu...")
+
+            # Restore curses settings that the nested wrapper tore down.
+            _restore_curses()
+            return True
+
+        def _do_refresh() -> None:
+            """Force re-discover all modes and update the file browser in-place."""
+            from .discover import discover_startup_files_modes
+
+            # Show brief status in the hint area before blocking
+            h, w = stdscr.getmaxyx()
+            try:
+                stdscr.addstr(h - 2, 0, " Refreshing discovery cache…"[:w - 1], curses.A_BOLD)
+                stdscr.refresh()
+            except curses.error:
+                pass
+
+            new_modes = discover_startup_files_modes(
+                family, existing_only=True, full_paths=True, force_refresh=True
+            )
+            st["modes"] = new_modes
+            st["files"] = list(dict.fromkeys(f for flist in new_modes.values() for f in flist))
+            st["cache_age"] = 0.0
+            # Reset file-browser state so nothing points past the new data
+            st["expanded"] = {m: (i == 0) for i, m in enumerate(new_modes)}
+            st["cursor"] = 0
+            st["scroll"] = 0
+
+        def _do_init() -> None:
+            """Run ``shellenv init`` non-interactively and show output."""
+            import subprocess
+
+            print(f"\nRunning shellenv init for family: {family}")
+            print("─" * 60)
+            try:
+                result = subprocess.run(
+                    ["shellenv", "init", "--family", family, "--yes"],
+                    capture_output=False,
+                    timeout=60,
+                )
+                if result.returncode != 0:
+                    print(f"\n[init exited with code {result.returncode}]")
+            except FileNotFoundError:
+                print("shellenv command not found on PATH")
+            except Exception as exc:
+                print(f"Init failed: {exc}")
+            input("\nPress Enter to return to the main menu...")
+
+        _draw()
+        while True:
+            ch = stdscr.getch()
+            rows = _flat()
+            dl = st["dl"]
+
+            if ch in (ord("q"), ord("Q"), 27):
+                break
+            elif ch == 9:  # Tab — switch active panel
+                st["panel"] = 1 - st["panel"]
+            elif ch in (curses.KEY_DOWN, ord("j")):
+                if st["panel"] == 0:
+                    if st["cursor"] < len(rows) - 1:
+                        st["cursor"] += 1
+                        if dl > 0 and st["cursor"] >= st["scroll"] + dl:
+                            st["scroll"] += 1
+                else:
+                    if st["action"] < len(_ACTIONS) - 1:
+                        st["action"] += 1
+            elif ch in (curses.KEY_UP, ord("k")):
+                if st["panel"] == 0:
+                    if st["cursor"] > 0:
+                        st["cursor"] -= 1
+                        if st["cursor"] < st["scroll"]:
+                            st["scroll"] = max(0, st["scroll"] - 1)
+                else:
+                    if st["action"] > 0:
+                        st["action"] -= 1
+            elif ch in (curses.KEY_ENTER, 10, 13):
+                if st["panel"] == 0:
+                    if 0 <= st["cursor"] < len(rows):
+                        kind, mode, _ = rows[st["cursor"]]
+                        if kind == "group":
+                            st["expanded"][mode] = not st["expanded"].get(mode, False)
+                            rows2 = _flat()
+                            st["cursor"] = min(st["cursor"], max(0, len(rows2) - 1))
+                            if dl > 0:
+                                st["scroll"] = min(st["scroll"], max(0, len(rows2) - dl))
+                else:
+                    if not _activate(st["action"]):
+                        break
+            else:
+                # Global keyboard shortcuts — uppercase avoids nav key conflicts.
+                # Lowercase shortcuts also work for keys not used by navigation.
+                for idx, (key, _) in enumerate(_ACTIONS):
+                    if ch == ord(key.upper()) or (
+                        key not in ("j", "k", "h", "l") and ch == ord(key)
+                    ):
+                        if not _activate(idx):
+                            return
+                        break
+
+            _draw()
+
+    curses.wrapper(_wrapper)
+
+
 def launch_tui() -> None:
-    """Launch the TUI with placeholder data."""
-    raise NotImplementedError("Use display_trace_tui(analysis) to show trace results")
+    """Launch the main TUI home screen.
+
+    Auto-detects the shell family and discovers startup files, then calls
+    :func:`display_main_tui`.  This is the entry point for ``shellenv tui``.
+    """
+    from .detect_shell import detect_current_and_intended_shell
+    from .discover import discover_startup_files_modes
+
+    info = detect_current_and_intended_shell()
+    family = (info.get("intended_family") or "bash").lower()
+    modes_data = discover_startup_files_modes(family, existing_only=True, full_paths=True)
+    display_main_tui(family, modes_data)
 
 
 def display_discovery_tui(
@@ -1317,7 +1711,9 @@ def display_restore_tui(
                 force = not force
 
             if ch in (curses.KEY_ENTER, 10, 13):
-                selected_files = [filtered_manifest_rel[i] for i, c in enumerate(state.checked) if c]
+                selected_files = [
+                    filtered_manifest_rel[i] for i, c in enumerate(state.checked) if c
+                ]
                 if not selected_files:
                     status = "No files selected"
                     _draw_restore()
@@ -1453,7 +1849,11 @@ def _show_parent_rc_warning_screen(stdscr, detail: Any) -> None:
 
 
 def _show_compose_parent_rc_warnings(stdscr, details: list[Any]) -> None:
-    """Show parent-rc warnings one at a time (``q`` / ``a`` per :func:`_show_parent_rc_warning_screen`)."""
+    """Show parent-rc warnings one at a time.
+
+    Calls :func:`_show_parent_rc_warning_screen` for each entry; user presses
+    ``q`` to skip or ``a`` to accept.
+    """
     for d in details:
         _show_parent_rc_warning_screen(stdscr, d)
 
@@ -1474,7 +1874,11 @@ def display_compose_pick_tui(family: str) -> list[str]:
     list[str]
         Absolute paths of installed files (empty if cancelled).
     """
-    from .compose import compose_parent_rc_warning_details, install_compose_files, list_compose_files
+    from .compose import (
+        compose_parent_rc_warning_details,
+        install_compose_files,
+        list_compose_files,
+    )
 
     path_warnings: list[str] = []
     files = list_compose_files(family, path_kind_warnings=path_warnings)

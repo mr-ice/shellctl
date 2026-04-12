@@ -119,7 +119,7 @@ def run_shell_trace(
 
     # Build basic invocation flags: prefer login noninteractive by default
     if args is None:
-        args = ["-l", "-c", "true"]
+        args = ["-l", "-c", "exit"]
 
     # For bash: use BASH_XTRACEFD to redirect xtrace to a temp file and
     # set PS4 to include a timestamp and the ${BASH_SOURCE}:${LINENO} info.

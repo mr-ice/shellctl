@@ -38,7 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     detect_p = sub.add_parser("detect", help="Detect current and intended shell")
     detect_p.add_argument("--shell", dest="shell", help="Override intended shell (path or name)")
-    sub.add_parser("tui", help="Launch TUI (not implemented)")
+    tui_p = sub.add_parser("tui", help="Launch the main TUI home screen")
+    tui_p.add_argument("--family", help="Shell family (bash, zsh, tcsh; default: auto-detect)")
     disc = sub.add_parser("discover", help="Discover startup files for a shell family")
     disc.add_argument("--family", help="Shell family (bash, zsh, tcsh)")
     disc.add_argument("--shell-path", help="Path to shell executable to use for tracing")
@@ -53,11 +54,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--use-shell-trace",
         action="store_true",
         help="Force shell-level tracing (honors SHELLENV_MOCK_TRACE_DIR)",
-    )
-    disc.add_argument(
-        "--refresh-cache",
-        action="store_true",
-        help="Refresh discovery cache (ignore and remove cached results)",
     )
     disc.add_argument(
         "--existing-only",
@@ -161,7 +157,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- backup / archive / restore / list-backups ---
     backup_p = sub.add_parser("backup", help="Back up discovered startup files to a tar.gz archive")
-    backup_p.add_argument("--family", help="Shell family (bash, zsh, tcsh)")
+    _backup_family = backup_p.add_mutually_exclusive_group()
+    _backup_family.add_argument("--family", help="Shell family (bash, zsh, tcsh)")
+    _backup_family.add_argument(
+        "--all-families",
+        action="store_true",
+        help="Discover and include bash, zsh, and tcsh (deduplicated paths shared across families)",
+    )
     backup_p.add_argument(
         "--include", action="append", default=[], help="Include files matching pattern (repeatable)"
     )
@@ -169,9 +171,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--exclude", action="append", default=[], help="Exclude files matching pattern (repeatable)"
     )
     backup_p.add_argument("--tui", action="store_true", help="Interactive file selection TUI")
+    backup_p.add_argument(
+        "--refresh-cache",
+        action="store_true",
+        help="Ignore discovery cache TTL and re-run shell tracing (each family with --all-families)",  # noqa: E501
+    )
 
     archive_p = sub.add_parser("archive", help="Back up startup files and remove originals")
-    archive_p.add_argument("--family", help="Shell family (bash, zsh, tcsh)")
+    _archive_family = archive_p.add_mutually_exclusive_group()
+    _archive_family.add_argument("--family", help="Shell family (bash, zsh, tcsh)")
+    _archive_family.add_argument(
+        "--all-families",
+        action="store_true",
+        help="Discover and include bash, zsh, and tcsh (deduplicated paths shared across families)",
+    )
     archive_p.add_argument(
         "--include", action="append", default=[], help="Include files matching pattern (repeatable)"
     )
@@ -182,6 +195,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--yes", action="store_true", help="Skip confirmation before removing originals"
     )
     archive_p.add_argument("--tui", action="store_true", help="Interactive file selection TUI")
+    archive_p.add_argument(
+        "--refresh-cache",
+        action="store_true",
+        help="Ignore discovery cache TTL and re-run shell tracing (each family with --all-families)",  # noqa: E501
+    )
 
     restore_p = sub.add_parser("restore", help="Restore files from a backup archive")
     restore_p.add_argument(
@@ -423,11 +441,16 @@ def _resolve_family(args: argparse.Namespace) -> str:
     return family or "bash"
 
 
-def _discover_files(family: str) -> list[str]:
+def _discover_files(family: str, *, force_refresh: bool = False) -> list[str]:
     """Discover existing startup files for *family* as absolute paths."""
     from .discover import discover_startup_files
 
-    return discover_startup_files(family, existing_only=True, full_paths=True)
+    return discover_startup_files(
+        family,
+        existing_only=True,
+        full_paths=True,
+        force_refresh=force_refresh,
+    )
 
 
 _ALL_FAMILIES = ("bash", "zsh", "tcsh")
@@ -436,6 +459,8 @@ _ALL_FAMILIES = ("bash", "zsh", "tcsh")
 def _discover_all_families(
     include: list[str] | None = None,
     exclude: list[str] | None = None,
+    *,
+    force_refresh: bool = False,
 ) -> list[tuple[str, list[str]]]:
     """Discover existing startup files for all shell families.
 
@@ -457,7 +482,7 @@ def _discover_all_families(
     seen: set[str] = set()
     groups: list[tuple[str, list[str]]] = []
     for fam in _ALL_FAMILIES:
-        raw = _discover_files(fam)
+        raw = _discover_files(fam, force_refresh=force_refresh)
         raw = filter_files(raw, include=include, exclude=exclude)
         # Deduplicate across families (e.g. .profile appears in both bash and zsh)
         unique = [f for f in raw if f not in seen]
@@ -471,12 +496,20 @@ def _handle_backup(args: argparse.Namespace) -> int:
     """Handle the ``backup`` subcommand."""
     from .backup import create_backup, filter_files
 
-    family = _resolve_family(args)
     inc = args.include or None
     exc = args.exclude or None
+    refresh = getattr(args, "refresh_cache", False)
 
-    files = _discover_files(family)
-    files = filter_files(files, include=inc, exclude=exc)
+    if getattr(args, "all_families", False):
+        groups = _discover_all_families(inc, exc, force_refresh=refresh)
+        files = [p for _, paths in groups for p in paths]
+        family = "all"
+    else:
+        family = _resolve_family(args)
+        files = _discover_files(family, force_refresh=refresh)
+        files = filter_files(files, include=inc, exclude=exc)
+        groups = [(family, files)]
+
     if not files:
         print("no startup files found to back up")
         return 0
@@ -485,8 +518,8 @@ def _handle_backup(args: argparse.Namespace) -> int:
         try:
             from .tui import display_backup_tui
 
-            groups = [(family, files)]
-            result = display_backup_tui(groups, family, archive_mode=False)
+            active = _resolve_family(args) if getattr(args, "all_families", False) else family
+            result = display_backup_tui(groups, active, archive_mode=False)
             if result:
                 print(f"archive created: {result}")
             return 0
@@ -506,12 +539,20 @@ def _handle_archive(args: argparse.Namespace) -> int:
     """Handle the ``archive`` subcommand (backup + delete)."""
     from .backup import create_archive, filter_files
 
-    family = _resolve_family(args)
     inc = args.include or None
     exc = args.exclude or None
+    refresh = getattr(args, "refresh_cache", False)
 
-    files = _discover_files(family)
-    files = filter_files(files, include=inc, exclude=exc)
+    if getattr(args, "all_families", False):
+        groups = _discover_all_families(inc, exc, force_refresh=refresh)
+        files = [p for _, paths in groups for p in paths]
+        family = "all"
+    else:
+        family = _resolve_family(args)
+        files = _discover_files(family, force_refresh=refresh)
+        files = filter_files(files, include=inc, exclude=exc)
+        groups = [(family, files)]
+
     if not files:
         print("no startup files found to archive")
         return 0
@@ -520,8 +561,8 @@ def _handle_archive(args: argparse.Namespace) -> int:
         try:
             from .tui import display_backup_tui
 
-            groups = [(family, files)]
-            result = display_backup_tui(groups, family, archive_mode=True)
+            active = _resolve_family(args) if getattr(args, "all_families", False) else family
+            result = display_backup_tui(groups, active, archive_mode=True)
             if result:
                 print(f"archive created: {result}")
             return 0
@@ -799,7 +840,28 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "tui":
-        print("TUI mode not yet implemented")
+        import time
+
+        from .discover import _load_cache_payload, discover_startup_files_modes
+        from .modes import INVOCATION_MODES
+        from .tui import display_main_tui
+
+        family = _resolve_family(args)
+        modes_data = discover_startup_files_modes(family, existing_only=True, full_paths=True)
+
+        # Compute cache age from the oldest per-mode timestamp
+        oldest_ts: float | None = None
+        for mode in INVOCATION_MODES:
+            _, ts = _load_cache_payload(family, mode)
+            if ts is not None and (oldest_ts is None or ts < oldest_ts):
+                oldest_ts = ts
+        cache_age = time.time() - oldest_ts if oldest_ts is not None else None
+
+        try:
+            display_main_tui(family, modes_data, cache_age_secs=cache_age)
+        except Exception as exc:
+            print(f"TUI failed: {exc}", file=sys.stderr)
+            return 1
         return 0
 
     if args.cmd == "discover":
@@ -815,23 +877,19 @@ def main(argv: list[str] | None = None) -> int:
         # honor CLI flag to force shell-level tracer
         if getattr(args, "use_shell_trace", False):
             os.environ["SHELLENV_USE_SHELL_TRACE"] = "1"
-        refresh_cache = getattr(args, "refresh_cache", False)
         # normalize family
         if isinstance(family, str):
             family = family.lower()
         if not family:
             family = "bash"
         if getattr(args, "modes", False):
-            if refresh_cache:
-                from .discover import clear_cache
-
-                clear_cache(family)
             from .modes import mode_to_args, resolve_modes
 
             mode_list = resolve_modes(getattr(args, "mode_filters", None))
             modes = discover_startup_files_modes(
                 family,
                 shell_path=shell_path,
+                force_refresh=True,
                 existing_only=getattr(args, "existing_only", False),
                 full_paths=getattr(args, "full_paths", False),
                 modes=mode_list if mode_list else None,
@@ -877,13 +935,10 @@ def main(argv: list[str] | None = None) -> int:
                 for f in files:
                     print(f)
         else:
-            if refresh_cache:
-                from .discover import clear_cache
-
-                clear_cache(family)
             files = discover_startup_files(
                 family,
                 shell_path=shell_path,
+                force_refresh=True,
                 existing_only=getattr(args, "existing_only", False),
                 full_paths=getattr(args, "full_paths", False),
             )
@@ -911,7 +966,7 @@ def main(argv: list[str] | None = None) -> int:
         mode_spec = getattr(args, "mode", None) or "ln"
         resolved = resolve_modes(mode_spec)
         mode = resolved[0] if resolved else "login_noninteractive"
-        args_list = mode_to_args(family, mode, exit_cmd="true")
+        args_list = mode_to_args(family, mode)
         dry = getattr(args, "dry_run", False)
         out_file = getattr(args, "output_file", None)
         # load merged config defaults when thresholds not specified on CLI
@@ -947,6 +1002,11 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(traces, str) and traces.startswith("DRYRUN:"):
             print(traces)
             return 0
+
+        if isinstance(traces, list):
+            from .discover import write_discovery_cache_for_mode
+
+            write_discovery_cache_for_mode(family, mode, traces)
 
         analysis = analyze_traces(
             traces,

@@ -1,14 +1,13 @@
 """Startup-file discovery for shells.
 
-This module provides a safe discovery strategy:
-- Try to use system tracers (`strace` on Linux, `dtruss` on macOS) to see
-  which files are opened when the shell starts.
-- If tracers are unavailable or fail, fall back to a curated list of
-  candidate startup files for common shells (bash, zsh, tcsh).
-- Cache simple results under the user's cache directory.
+Uses shell-level tracing (see ``trace``) to record which files under ``$HOME``
+are actually sourced for each invocation mode. Results are cached with a
+timestamp; stale entries are recomputed automatically based on
+``discover.cache_ttl_secs`` (or ``SHELLENV_DISCOVER_CACHE_TTL_SECS``).
 
-The tracer approach is best-effort; use with care. For now discovery
-exposes a simple API suitable for unit testing and CLI display.
+The ``discover`` and ``trace`` CLI commands always refresh traced data and
+update the cache. Other callers (for example ``backup``) reuse the cache when
+it is still fresh, unless ``force_refresh=True`` or CLI ``--refresh-cache``.
 """
 
 from __future__ import annotations
@@ -16,8 +15,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from collections.abc import Iterable
+import time
+from collections.abc import Iterable, Sequence
 from pathlib import Path
+from typing import Any
 
 CACHE_DIR = Path(os.environ.get("SHELLENV_CACHE_DIR") or Path.home() / ".cache" / "shellenv")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -31,15 +32,14 @@ def _cache_path(family: str, mode: str | None = None) -> Path:
 def clear_cache(family: str | None = None, mode: str | None = None) -> None:
     """Clear cached discovery results.
 
-    If `family` is None, clear all discovery caches. If `mode` is
-    provided, clear only that family's mode cache.
+    If *family* is ``None``, clear all discovery caches. If *mode* is set,
+    clear only that family's mode cache.
     """
     if family is None:
-        # remove any discovered_*.json files
         for p in CACHE_DIR.glob("discovered_*.json"):
             try:
                 p.unlink()
-            except Exception:
+            except OSError:
                 pass
         return
 
@@ -47,38 +47,112 @@ def clear_cache(family: str | None = None, mode: str | None = None) -> None:
     try:
         if p.exists():
             p.unlink()
-    except Exception:
+    except OSError:
         pass
 
 
-def _save_cache(family: str, files: Iterable[str], mode: str | None = None) -> None:
+def get_discovery_cache_ttl_secs() -> float:
+    """Maximum cache age in seconds before discovery is recomputed.
+
+    Override with environment variable ``SHELLENV_DISCOVER_CACHE_TTL_SECS``.
+    Default from config ``discover.cache_ttl_secs`` is one week (604800).
+    """
+    raw = os.environ.get("SHELLENV_DISCOVER_CACHE_TTL_SECS")
+    if raw is not None and raw.strip() != "":
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    try:
+        from .config import config_get
+
+        v = config_get("discover.cache_ttl_secs")
+        if v is None:
+            return 604800.0
+        return float(v)
+    except Exception:
+        return 604800.0
+
+
+def _save_cache_payload(family: str, mode: str | None, files: Iterable[str]) -> None:
     p = _cache_path(family, mode)
-    p.write_text(json.dumps(sorted(set(files))), encoding="utf8")
+    payload = {"updated": time.time(), "files": sorted(set(files))}
+    p.write_text(json.dumps(payload), encoding="utf8")
 
 
-def _load_cache(family: str, mode: str | None = None) -> list[str]:
+def _load_cache_payload(family: str, mode: str | None) -> tuple[list[str], float | None]:
+    """Return (files, updated_unix_time_or_None). Legacy list-only JSON is treated as stale."""
     p = _cache_path(family, mode)
     if not p.exists():
-        return []
+        return [], None
     try:
-        return json.loads(p.read_text(encoding="utf8"))
+        data = json.loads(p.read_text(encoding="utf8"))
     except Exception:
-        return []
+        return [], None
+    if isinstance(data, list):
+        return data, None
+    if isinstance(data, dict) and "files" in data:
+        fl = data["files"]
+        if not isinstance(fl, list):
+            return [], None
+        ts = data.get("updated")
+        try:
+            updated = float(ts) if ts is not None else None
+        except (TypeError, ValueError):
+            updated = None
+        return [str(x) for x in fl], updated
+    return [], None
+
+
+def _cache_entry_fresh(updated_ts: float | None, ttl_secs: float) -> bool:
+    if updated_ts is None or ttl_secs <= 0:
+        return False
+    return (time.time() - updated_ts) < ttl_secs
 
 
 # Valid startup file prefixes per family (basename must match or start with one of these).
 # Used to filter out wrong-shell files when tracer misreports (e.g. running zsh instead of tcsh).
 _FAMILY_FILE_PREFIXES: dict[str, tuple[str, ...]] = {
-    "bash": (".bashrc", ".bash_profile", ".bash_login", ".profile", ".bash_logout", ".bash_env"),
-    "zsh": (".zshenv", ".zshrc", ".zprofile", ".zlogin", ".zlogout"),
-    "tcsh": (".tcshrc", ".cshrc", ".login", ".tcshenv"),
+    "bash": (
+        ".bashrc",
+        ".bash_profile",
+        ".bash_login",
+        ".profile",
+        ".bash_logout",
+        ".bash_env",
+        ".bash_history",
+        ".inputrc",
+    ),
+    "zsh": (".zshenv", ".zshrc", ".zprofile", ".zlogin", ".zlogout", ".zsh_history"),
+    "tcsh": (".tcshrc", ".cshrc", ".login", ".tcshenv", ".logout", ".history"),
+}
+
+# Glob patterns under $HOME for files startup tracing never sees (logout-only scripts,
+# history, readline) or that are optional ecosystem files. Matched paths must still pass
+# :func:`_is_valid_for_family`.
+_FAMILY_SUPPLEMENTAL_GLOBS: dict[str, tuple[str, ...]] = {
+    "bash": (
+        ".bash_logout",
+        ".bash_logout-*",
+        ".bash_history",
+        ".inputrc",
+    ),
+    "zsh": (
+        ".zlogout",
+        ".zlogout-*",
+        ".zsh_history",
+    ),
+    "tcsh": (
+        ".logout",
+        ".logout-*",
+        ".history",
+    ),
 }
 
 
 def _is_valid_for_family(path_or_name: str, family: str) -> bool:
     """Return True if basename is a valid startup file for the given family."""
     family = family.lower()
-    # zsh startup files commonly source helpers from ~/.zshlib/*
     if family == "zsh":
         rel = path_or_name.lstrip("/")
         if rel.startswith(".zshlib/"):
@@ -88,17 +162,73 @@ def _is_valid_for_family(path_or_name: str, family: str) -> bool:
     return any(base == p or base.startswith(p + "-") for p in prefixes)
 
 
-def _run_tracer(family: str, shell_path: str, args: list[str]) -> set[str]:
-    """Run shell trace collection and return startup files under $HOME.
-
-    Returns a set of home-relative file paths discovered.
-    If tracing fails, returns an empty set.
-    """
-    home = str(Path.home())
-    files: set[str] = set()
-
+def _supplemental_home_relative_paths(family: str, home: Path) -> list[str]:
+    """Return existing home-relative paths not covered by startup tracing."""
+    fam = family.lower()
+    patterns = _FAMILY_SUPPLEMENTAL_GLOBS.get(fam, ())
+    if not patterns:
+        return []
+    found: set[str] = set()
     try:
-        # import here to avoid top-level dependency cycles
+        home_resolved = home.resolve()
+    except OSError:
+        home_resolved = home
+    for pattern in patterns:
+        for p in home.glob(pattern):
+            try:
+                if not p.exists():
+                    continue
+            except OSError:
+                continue
+            if p.is_dir():
+                continue
+            try:
+                rel = p.relative_to(home_resolved)
+            except ValueError:
+                try:
+                    rel = p.relative_to(home)
+                except ValueError:
+                    continue
+            rel_s = rel.as_posix()
+            if rel_s in found:
+                continue
+            if not _is_valid_for_family(rel_s, fam):
+                continue
+            found.add(rel_s)
+    return sorted(found)
+
+
+def traces_to_home_rel_paths(family: str, traces: Sequence[Any]) -> list[str]:
+    """Map tracer output to unique home-relative paths valid for *family*."""
+    home = str(Path.home())
+    out: list[str] = []
+    seen: set[str] = set()
+    for ft in traces:
+        path = getattr(ft, "path", None)
+        if path is None:
+            continue
+        abs_path = os.path.normpath(os.path.abspath(os.path.expanduser(str(path))))
+        if home and not abs_path.startswith(home):
+            continue
+        rel = os.path.relpath(abs_path, home)
+        if not rel or rel in seen:
+            continue
+        if not _is_valid_for_family(rel, family):
+            continue
+        seen.add(rel)
+        out.append(rel)
+    return out
+
+
+def write_discovery_cache_for_mode(family: str, mode: str, traces: Sequence[Any]) -> None:
+    """Persist discovery for one mode from ``collect_startup_file_traces`` output."""
+    rels = traces_to_home_rel_paths(family, traces)
+    _save_cache_payload(family, mode, rels)
+
+
+def _run_tracer(family: str, shell_path: str, args: list[str]) -> set[str]:
+    """Run shell trace collection and return startup files under ``$HOME``."""
+    try:
         from .trace import collect_startup_file_traces
 
         traces = collect_startup_file_traces(
@@ -109,16 +239,7 @@ def _run_tracer(family: str, shell_path: str, args: list[str]) -> set[str]:
         )
         if isinstance(traces, str):
             return set()
-        home = str(Path.home())
-        for ft in traces:
-            # Only include files under $HOME (user's startup files)
-            abs_path = os.path.normpath(os.path.abspath(os.path.expanduser(ft.path)))
-            if home and not abs_path.startswith(home):
-                continue
-            rel = os.path.relpath(abs_path, home)
-            if rel:
-                files.add(rel)
-        return files
+        return set(traces_to_home_rel_paths(family, traces))
     except Exception:
         return set()
 
@@ -126,9 +247,9 @@ def _run_tracer(family: str, shell_path: str, args: list[str]) -> set[str]:
 def discover_startup_files_modes(
     family: str,
     shell_path: str | None = None,
-    use_cache: bool = True,
     *,
-    include_inferred: bool = True,
+    force_refresh: bool = False,
+    cache_ttl_secs: float | None = None,
     existing_only: bool = False,
     full_paths: bool = False,
     modes: list[str] | None = None,
@@ -137,24 +258,18 @@ def discover_startup_files_modes(
 
     Parameters
     ----------
-    modes : list[str] or None
-        Modes to discover. If None, use all INVOCATION_MODES.
-
-    Returns
-    -------
-    dict
-        Mapping mode -> list of file basenames.
+    force_refresh
+        If True, ignore the on-disk cache and always run the tracer, then save.
+    cache_ttl_secs
+        Override TTL for this call; default from config / env.
     """
     from .modes import INVOCATION_MODES, mode_to_args
 
     family = family.lower()
     mode_list = modes if modes is not None else list(INVOCATION_MODES)
     results: dict[str, list[str]] = {}
+    ttl = get_discovery_cache_ttl_secs() if cache_ttl_secs is None else float(cache_ttl_secs)
 
-    # Resolve shell path for tracing; required to actually trace sourced files.
-    # For tcsh, prefer patched tcsh with TCSH_XTRACEFD (see patches/README.md).
-    # Do not use shell_path from detection when it points to a different shell
-    # (e.g. /bin/zsh); that would trace the wrong shell and return wrong files.
     if family == "bash":
         from .trace import get_bash_for_tracing
 
@@ -163,7 +278,7 @@ def discover_startup_files_modes(
         else:
             tracer_shell = get_bash_for_tracing(None)
         tracer_shell = tracer_shell or shutil.which("bash")
-    elif family == "tcsh" or family == "csh":
+    elif family in ("tcsh", "csh"):
         from .trace import get_tcsh_for_tracing
 
         if shell_path and os.path.basename(shell_path).lower() in ("tcsh", "csh"):
@@ -177,35 +292,29 @@ def discover_startup_files_modes(
     for mode in mode_list:
         if mode not in INVOCATION_MODES:
             continue
+        used_cache = False
         traced: set[str] = set()
-        args = mode_to_args(family, mode)
-        if tracer_shell:
-            traced = _run_tracer(family, tracer_shell, args)
 
-        if not traced and use_cache:
-            traced = set(_load_cache(family, mode))
+        if not force_refresh:
+            cached_files, updated_ts = _load_cache_payload(family, mode)
+            if _cache_entry_fresh(updated_ts, ttl):
+                traced = set(cached_files)
+                used_cache = True
 
-        result: list[str] = []
-        seen: set[str] = set()
+        if not used_cache:
+            args = mode_to_args(family, mode)
+            if tracer_shell:
+                traced = _run_tracer(family, tracer_shell, args)
+            else:
+                traced = set()
+            filtered = sorted(traced)
+            try:
+                _save_cache_payload(family, mode, filtered)
+            except OSError:
+                pass
 
-        # Prioritize traced: when we have traced files, use them as authoritative.
-        # Filter to family-appropriate files only (avoids wrong-shell traces e.g.
-        # zsh when tcsh fails).
-        for f in sorted(traced):
-            if f and f not in seen and _is_valid_for_family(f, family):
-                result.append(f)
-                seen.add(f)
+        result = sorted(traced)
 
-        if include_inferred:
-            # Include canonical entry points as a fallback when callers want
-            # inferred candidates in addition to traced ones.
-            extra = [f".{family}rc", f".{family}env"]
-            for e in extra:
-                if e not in seen:
-                    result.append(e)
-                    seen.add(e)
-
-        # optionally filter to existing files and/or return full paths
         processed: list[str] = []
         for name in result:
             if full_paths:
@@ -218,11 +327,6 @@ def discover_startup_files_modes(
                     continue
             processed.append(cand)
 
-        try:
-            _save_cache(family, result, mode)
-        except Exception:
-            pass
-
         results[mode] = processed
 
     return results
@@ -231,21 +335,21 @@ def discover_startup_files_modes(
 def discover_startup_files(
     family: str,
     shell_path: str | None = None,
-    use_cache: bool = True,
     *,
-    include_inferred: bool = True,
+    force_refresh: bool = False,
+    cache_ttl_secs: float | None = None,
     existing_only: bool = False,
     full_paths: bool = False,
     modes: list[str] | None = None,
 ) -> list[str]:
-    """Backward-compatible wrapper: returns union of all mode lists (deduped)."""
+    """Return union of all mode lists (deduped)."""
     from .modes import INVOCATION_MODES
 
     mode_results = discover_startup_files_modes(
         family,
         shell_path=shell_path,
-        use_cache=use_cache,
-        include_inferred=include_inferred,
+        force_refresh=force_refresh,
+        cache_ttl_secs=cache_ttl_secs,
         existing_only=existing_only,
         full_paths=full_paths,
         modes=modes,
@@ -257,4 +361,15 @@ def discover_startup_files(
             if f not in seen:
                 out.append(f)
                 seen.add(f)
+
+    home = Path.home()
+    for rel in _supplemental_home_relative_paths(family, home):
+        check_path = str(home / rel)
+        if not os.path.exists(check_path):
+            continue
+        cand = check_path if full_paths else rel
+        if cand in seen:
+            continue
+        out.append(cand)
+        seen.add(cand)
     return out

@@ -24,6 +24,6 @@ def test_run_tracer_collect_output_parsing(monkeypatch, tmp_path):
         ],
     )
 
-    found = _run_tracer("bash", "/bin/bash", ["-l", "-c", ":"])
+    found = _run_tracer("bash", "/bin/bash", ["-l", "-c", "exit"])
     assert isinstance(found, set)
     assert any(name in (".bashrc", ".bash_profile") for name in found)

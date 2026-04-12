@@ -431,6 +431,32 @@ class TestCLIBackup:
         manifest = read_manifest(archives[0])
         assert manifest.files == [".bashrc"]
 
+    def test_backup_all_families_manifest(self, tmp_path, monkeypatch):
+        from shellenv.cli import main
+
+        home = _make_home(tmp_path, monkeypatch)
+        backup_dir = tmp_path / "backups"
+        monkeypatch.setenv("SHELLENV_BACKUP_DIR", str(backup_dir))
+        monkeypatch.setattr("shellenv.backup.Path.home", lambda: home)
+        (home / ".bashrc").write_text("# b")
+        (home / ".zshrc").write_text("# z")
+
+        def fake_all(inc, exc, *, force_refresh=False):
+            return [
+                ("bash", [str(home / ".bashrc")]),
+                ("zsh", [str(home / ".zshrc")]),
+            ]
+
+        monkeypatch.setattr("shellenv.cli._discover_all_families", fake_all)
+
+        rc = main(["backup", "--all-families"])
+        assert rc == 0
+        archives = list(backup_dir.glob("shellenv-backup-*.tar.gz"))
+        assert len(archives) == 1
+        manifest = read_manifest(archives[0])
+        assert manifest.family == "all"
+        assert set(manifest.files) == {".bashrc", ".zshrc"}
+
 
 class TestCLIArchive:
     """CLI integration tests for archive subcommand."""

@@ -19,7 +19,8 @@ def test_load_config_migrates_allow_non_repo(tmp_path):
 def test_default_config_dict():
     assert default_config_dict() == {
         "trace": {"threshold_secs": None, "threshold_percent": None},
-        "repo": {"url": None, "destination": None, "branch": "main"},
+        "discover": {"cache_ttl_secs": 604800},
+        "repo": {"url": None, "destination": "~/.shellenv/env-source/", "branch": "main"},
         "compose": {
             "paths": [],
             "shell_rc_files": [],

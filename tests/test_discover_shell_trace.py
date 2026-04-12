@@ -16,11 +16,13 @@ def test_discover_uses_shell_trace_mock(monkeypatch):
     fixtures = os.path.join(os.getcwd(), "tests", "fixtures", "traces")
     monkeypatch.setenv("SHELLENV_MOCK_TRACE_DIR", fixtures)
     monkeypatch.setenv("SHELLENV_USE_SHELL_TRACE", "1")
+    # Fixture paths are under /home/testuser/...
+    monkeypatch.setenv("HOME", "/home/testuser")
 
     modes = discover_startup_files_modes(
         "bash",
         shell_path="/bin/bash",
-        use_cache=False,
+        force_refresh=True,
     )
     # expect that mock traces expose files like .bash_profile or .bashrc
     assert any(any(name in (".bash_profile", ".bashrc") for name in modes[m]) for m in modes)
@@ -34,11 +36,13 @@ def test_discover_tcsh_uses_shell_trace_mock(monkeypatch):
     fixtures = os.path.join(os.getcwd(), "tests", "fixtures", "traces")
     monkeypatch.setenv("SHELLENV_MOCK_TRACE_DIR", fixtures)
     monkeypatch.setenv("SHELLENV_USE_SHELL_TRACE", "1")
+    # Fixture paths are under /home/testuser/...
+    monkeypatch.setenv("HOME", "/home/testuser")
 
     modes = discover_startup_files_modes(
         "tcsh",
         shell_path="/bin/tcsh",
-        use_cache=False,
+        force_refresh=True,
     )
     # expect that mock traces expose .cshrc or .login
     assert any(any(name in (".cshrc", ".login", ".tcshrc") for name in modes[m]) for m in modes)
@@ -55,8 +59,7 @@ def test_discover_zsh_includes_zshlib_sources_mock(monkeypatch, tmp_path):
     modes = discover_startup_files_modes(
         "zsh",
         shell_path="/bin/zsh",
-        use_cache=False,
-        include_inferred=False,
+        force_refresh=True,
         modes=["login_noninteractive"],
     )
     assert ".zshlib/all" in modes["login_noninteractive"]

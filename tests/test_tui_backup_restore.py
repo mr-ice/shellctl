@@ -231,7 +231,7 @@ def _cli_backup_env(tmp_path, monkeypatch):
     bash_files = [str(home / ".bashrc"), str(home / ".bash_profile")]
     zsh_files = [str(home / ".zshrc")]
 
-    def _fake_discover(family):
+    def _fake_discover(family, **_kwargs):
         if family == "bash":
             return list(bash_files)
         if family == "zsh":

@@ -24,7 +24,7 @@ shell_rc_files = []
 # branch = "main"
 
 # Local path to clone repo into
-# destination = null
+destination = "~/.shellenv/env-source/"
 
 # Git repo URL for shell init files
 # url = null
@@ -36,3 +36,8 @@ shell_rc_files = []
 
 # Flag files taking longer than N seconds
 # threshold_secs = null
+
+
+[discover]
+# Discovery cache max age in seconds (default 7 days). Env: SHELLENV_DISCOVER_CACHE_TTL_SECS
+# cache_ttl_secs = 604800

@@ -1,26 +1,26 @@
-"""Tests for existing-only and full-paths options in discovery.
-
-These tests verify `discover_startup_files_modes` honors the
-`existing_only` and `full_paths` flags when locating startup files.
-"""
+"""Tests for existing-only and full-paths options in discovery."""
 
 from shellenv.discover import discover_startup_files_modes
 
 
 def test_existing_only_and_full_paths(tmp_path, monkeypatch):
-    """Ensure existing-only and full-paths return absolute paths for files that exist."""
-    # set HOME to tmp_path and create a .bashrc file
+    """Honor existing-only and full-paths using a controlled tracer."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    bashrc = tmp_path / ".bashrc"
-    bashrc.write_text("# test bashrc")
+    monkeypatch.setenv("SHELLENV_CACHE_DIR", str(tmp_path / "cache"))
+    (tmp_path / ".bashrc").write_text("# test bashrc")
+
+    monkeypatch.setattr("shellenv.discover._run_tracer", lambda *_a, **_k: {".bashrc"})
 
     modes = discover_startup_files_modes(
-        "bash", shell_path=None, use_cache=False, existing_only=True, full_paths=True
+        "bash",
+        shell_path="/bin/bash",
+        force_refresh=True,
+        existing_only=True,
+        full_paths=True,
     )
-    # at least one mode should include the full path to .bashrc
     found = False
     for files in modes.values():
         for f in files:
-            if str(bashrc) == f:
+            if str(tmp_path / ".bashrc") == f:
                 found = True
     assert found

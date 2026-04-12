@@ -27,11 +27,12 @@ Force the safer shell-level tracer (useful on macOS/CI):
 shellenv discover --use-shell-trace --modes
 ```
 
-Clear discovery cache:
-
-```bash
-shellenv discover --refresh-cache
-```
+Discovery results are cached under `SHELLENV_CACHE_DIR` (default
+`~/.cache/shellenv`) with a TTL (default 7 days: config `discover.cache_ttl_secs`,
+or env `SHELLENV_DISCOVER_CACHE_TTL_SECS`). **`shellenv discover` and
+`shellenv trace` always refresh** that cache for the work they do. **`backup` /
+`archive`** reuse the cache when it is still fresh; pass **`--refresh-cache`**
+to force a new trace.
 
 ## Logging
 
@@ -51,6 +52,7 @@ Levels: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: WARNING).
 - `SHELLENV_USE_SHELL_TRACE`: set to `1`, `true`, or `yes` to force the
   shell-level tracer instead of system tracers like `strace`.
 - `SHELLENV_CACHE_DIR`: overrides the cache directory used by discovery.
+- `SHELLENV_DISCOVER_CACHE_TTL_SECS`: overrides discovery cache max age in seconds.
 - `SHELLENV_BACKUP_DIR`: overrides the backup archive directory
   (default `~/.cache/shellenv/backups`).
 
@@ -58,17 +60,17 @@ Levels: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: WARNING).
 
 - `detect` — detect current and intended shell and family. See
   [src/shellenv/detect_shell.py](src/shellenv/detect_shell.py)
-- `discover` — discover candidate startup files (per-mode or union). Flags:
-  `--family`, `--shell-path`, `--use-shell-trace`, `--refresh-cache`,
+- `discover` — discover startup files actually sourced (per-mode or union); always updates the discovery cache. Flags:
+  `--family`, `--shell-path`, `--use-shell-trace`,
   `--modes`, `--mode` (li/ln/ni/nn or full names, repeatable). See [src/shellenv/discover.py](src/shellenv/discover.py).
-- `trace` — run a shell-level trace and summarize per-file timing. Flags:
+- `trace` — run a shell-level trace and summarize per-file timing; updates the discovery cache for the chosen mode. Flags:
   `--family`, `--shell-path`, `--mode` (li/ln/ni/nn), `--dry-run`, `--output-file`,
   `--threshold-secs`, `--threshold-percent`, `--tui`. Core tracing/parsing is in
   [src/shellenv/trace.py](src/shellenv/trace.py).
 - `backup` — back up discovered startup files to a tar.gz archive. Flags:
-  `--family`, `--include`, `--exclude`, `--tui`.
+  `--family`, `--include`, `--exclude`, `--tui`, `--refresh-cache`.
 - `archive` — back up startup files and remove originals. Flags:
-  `--family`, `--include`, `--exclude`, `--yes`, `--tui`.
+  `--family`, `--include`, `--exclude`, `--yes`, `--tui`, `--refresh-cache`.
 - `restore` — restore files from a backup archive. Flags:
   `--archive`, `--include`, `--exclude`, `--force`, `--yes`, `--tui`.
 - `list-backups` — list available backup archives with timestamps and 
@@ -95,9 +97,9 @@ discovery/trace code paths using these fixtures set `SHELLENV_MOCK_TRACE_DIR`.
 - Parsers: `src/shellenv/trace.py` contains parsers for bash, zsh, tcsh and
   a generic fallback. Improve path normalization and timestamp extraction
   there when adding new fixtures.
-- Discovery: `src/shellenv/discover.py` prefers system tracers where
-  available but falls back to the safer shell-level tracer which honors the
-  mock fixtures. The cache directory defaults to `~/.cache/shellenv` but
+- Discovery: `src/shellenv/discover.py` uses shell tracing (and optional
+  system tracers) and caches per-mode results with a TTL. The cache directory
+  defaults to `~/.cache/shellenv` but
   can be overridden with `SHELLENV_CACHE_DIR`.
 - TUI: a simple curses UI lives in `src/shellenv/tui.py`.
 
@@ -183,6 +185,10 @@ shellenv config set trace.threshold_secs 0.05
 # string
 shellenv config set repo.url https://example.com/dotfiles.git
 
+# default destination for init-repo clone path
+# repo.destination defaults to ~/.shellenv/env-source/
+shellenv config set repo.destination ~/.shellenv/env-source/
+
 # clear a nullable key back to null
 shellenv config set trace.threshold_secs null
 
@@ -257,8 +263,10 @@ Override with the `SHELLENV_BACKUP_DIR` environment variable.
 Safety and notes
 
 - The tracer runs the user's shell and will execute startup files. By
-  default the invocation uses `-c true` to exit after startup, but the
-  startup files are still executed — run on a safe/test account if you
+  default the invocation uses `-c exit` so the shell leaves through the
+  `exit` builtin after startup (needed for bash to run `~/.bash_logout` in
+  login non-interactive mode, and improves logout-hook tracing for zsh/tcsh).
+  Startup files are still executed — run on a safe/test account if you
   are worried about side-effects.
 - The syscall-level tracing (strace/eBPF/DTrace) is not used by default
   because it can require privileges. The shell-level approach is

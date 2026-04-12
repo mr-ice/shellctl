@@ -70,7 +70,7 @@ def mode_to_args(
     family: str,
     mode: str,
     *,
-    exit_cmd: str = ":",
+    exit_cmd: str = "exit",
 ) -> list[str]:
     """Return shell invocation args for a given family and mode.
 
@@ -80,14 +80,20 @@ def mode_to_args(
         Shell family (bash, zsh, tcsh).
     mode : str
         Full mode name (e.g. login_interactive).
+    exit_cmd : str
+        Command passed as ``-c`` so the shell exits after startup. Use the
+        ``exit`` builtin (default), not a no-op like ``:`` or ``true``, so
+        **login** shells run logout hooks: bash reads ``~/.bash_logout`` when
+        a non-interactive login shell executes ``exit``; zsh runs ``~/.zlogout``
+        when a login shell exits; tcsh runs ``~/.logout`` at logout.
 
     Returns
     -------
     list[str]
-        Args to pass to the shell (e.g. ["-l", "-i", "-c", ":"]).
+        Args to pass to the shell (e.g. ``["-l", "-i", "-c", "exit"]``).
     """
     if mode not in INVOCATION_MODES:
-        return ["-l", "-c", ":"]
+        return ["-l", "-c", "exit"]
     login, interactive = mode.split("_")
     args: list[str] = []
     if family.lower() in ("bash", "zsh", "tcsh"):
@@ -101,6 +107,7 @@ def mode_to_args(
         if interactive == "interactive":
             args.append("-i")
     # Always add -c <exit_cmd> so the shell exits after startup (avoids blocking).
+    # Default exit_cmd is "exit" so login shells run logout files (see exit_cmd docstring).
     args.extend(["-c", exit_cmd])
     return args
 

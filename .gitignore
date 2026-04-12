@@ -18,3 +18,5 @@ shelltree/traces/
 .coverage
 repos
 uv.lock
+.aidesigner/*
+!.aidesigner/.gitkeep

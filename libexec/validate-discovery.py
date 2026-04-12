@@ -66,8 +66,7 @@ def main() -> int:
             results = discover_startup_files_modes(
                 family,
                 shell_path=None,
-                use_cache=False,
-                include_inferred=False,
+                force_refresh=True,
             )
         finally:
             if old_home is not None:

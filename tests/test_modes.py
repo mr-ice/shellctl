@@ -32,12 +32,12 @@ def test_resolve_modes_list():
 
 
 def test_mode_to_args_login_interactive():
-    assert mode_to_args("zsh", "login_interactive") == ["-l", "-i", "-c", ":"]
+    assert mode_to_args("zsh", "login_interactive") == ["-l", "-i", "-c", "exit"]
 
 
 def test_mode_to_args_login_noninteractive():
-    assert mode_to_args("bash", "login_noninteractive") == ["-l", "-c", ":"]
+    assert mode_to_args("bash", "login_noninteractive") == ["-l", "-c", "exit"]
 
 
 def test_mode_to_args_nonlogin_noninteractive():
-    assert mode_to_args("tcsh", "nonlogin_noninteractive") == ["-c", ":"]
+    assert mode_to_args("tcsh", "nonlogin_noninteractive") == ["-c", "exit"]

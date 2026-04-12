@@ -205,6 +205,7 @@ class TestGlobalTemplate:
     def test_render_contains_sections(self, _isolate_config):
         text = render_default_config_template()
         assert "[trace]" in text
+        assert "[discover]" in text
         assert "[compose]" in text
 
     def test_write_template_file(self, _isolate_config, tmp_path):

@@ -1,0 +1,46 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude mcp:*)",
+      "Read(//Users/michael/.claude/**)",
+      "Bash(npx -y @aidesigner/agent-skills init)",
+      "Bash(curl -s -H \"Authorization: Bearer tk_6404d8dea6bd65a26ef35fcfb1705f58ae242639\" http://localhost:3456/api/v1/projects)",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s -H \"Authorization: Bearer tk_6404d8dea6bd65a26ef35fcfb1705f58ae242639\" \"http://localhost:3456/api/v1/projects/2/tasks?per_page=50\")",
+      "Bash(python3 -c ':*)",
+      "Bash(curl -s -H \"Authorization: Bearer tk_6404d8dea6bd65a26ef35fcfb1705f58ae242639\" \"http://localhost:3456/api/v1/projects/2/views\")",
+      "Read(//Users/michael/**)",
+      "Bash(python3 -c \"import requests\")",
+      "Bash(uv run:*)",
+      "Bash(python3 tools/vikunja_cli.py list)",
+      "mcp__aidesigner__get_credit_status",
+      "mcp__aidesigner__generate_design",
+      "Bash(npx -y @aidesigner/agent-skills capture --html-file .aidesigner/mcp-latest.html --prompt 'shellenv TUI main loop — 80x24 ncurses-style terminal home screen with file browser, action sidebar, status bar' --transport mcp --remote-run-id 456cf2a7-75bb-48bb-8530-521f1a2abbaa)",
+      "Bash(npx -y @aidesigner/agent-skills adopt --id \"2026-04-12T00-35-42-264Z-shellenv-tui-main-loop-80x24-ncurses\")",
+      "Bash(python tools/vikunja_cli.py percent shellenv-2 100)",
+      "Bash(python tools/vikunja_cli.py bucket shellenv-2 Done)",
+      "Bash(python tools/vikunja_cli.py update shellenv-2 --percent 100)",
+      "Bash(python tools/vikunja_cli.py done shellenv-2)",
+      "Bash(python tools/vikunja_cli.py move shellenv-2 Done)",
+      "Bash(python tools/vikunja_cli.py list)",
+      "Bash(python tools/vikunja_cli.py comment shellenv-26 \"Refresh action \\(F key\\) implemented in display_main_tui. Calls discover_startup_files_modes\\(force_refresh=True\\), updates st['modes'], st['files'], st['cache_age'] in-place, resets cursor/scroll. Status bar shows 'Refreshing…' while running.\")",
+      "Bash(python tools/vikunja_cli.py update shellenv-26 --percent 100)",
+      "Bash(python tools/vikunja_cli.py done shellenv-26)",
+      "Bash(python tools/vikunja_cli.py move shellenv-26 Done)",
+      "Bash(python tools/vikunja_cli.py comment shellenv-27 \"Init action \\(I key\\) implemented in display_main_tui. Calls subprocess.run\\(['shellenv', 'init', '--family', family, '--yes']\\), then suspends curses and waits for Enter before restoring.\")",
+      "Bash(python tools/vikunja_cli.py update shellenv-27 --percent 100)",
+      "Bash(python tools/vikunja_cli.py done shellenv-27)",
+      "Bash(python tools/vikunja_cli.py move shellenv-27 Done)",
+      "Bash(python tools/vikunja_cli.py create \"Fix git not found when PATH is stripped in init/init-repo\" --priority medium)",
+      "Bash(python tools/vikunja_cli.py comment shellenv-28 \"shutil.which\\('git'\\) also returns None when PATH is stripped \\(e.g. env - uv run shellenv\\). Fixed by resolving git at import time with fallback to /usr/bin/git, /usr/local/bin/git, /opt/homebrew/bin/git.\")",
+      "Bash(python tools/vikunja_cli.py update shellenv-28 --percent 100)",
+      "Bash(python tools/vikunja_cli.py done shellenv-28)",
+      "Bash(python tools/vikunja_cli.py move shellenv-28 Done)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)"
+    ],
+    "additionalDirectories": [
+      "/Users/michael/.claude/projects/-Users-michael-project-shellenv"
+    ]
+  }
+}
